@@ -843,12 +843,9 @@ class pg_sql:
 		except Exception as error:
 			raise error
 
-	# Processing mysql data - needs fixing
+	# Processing mysql data
 	def etl_mysql_data(self, my_database:str, table:str='', data_schema:str='mysql', remove_empty_tables:bool=True, ignore_tables:array_list=array_list()):
 		try:
-			# third party library import
-			import pymysql
-
 			# total timing
 			total_timer = timer()
 
@@ -860,29 +857,32 @@ class pg_sql:
 			self.create_schema(data_schema)
 
 			# open database - change
-			mysql_connection = pymsyql.connect(
+			mysql_connection = pymysql.connect(
 						host = self.__login_info['local_mysql']['host'],
 						database = my_database,
 						user = self.__login_info['local_mysql']['user'],
 						password = self.__login_info['local_mysql']['password'])
-			mysql_cursor = mssql_connection.cursor()
+			mysql_cursor = mysql_connection.cursor()
 			
 			# get all tables from mssql - change sql statement
 			tables_sql_statement = """
-				SELECT schema_name(tables.schema_id) as schema_name,
-					lower(tables.[name]) as table_name,
-					sum(partitions.rows) as row_count
-				FROM sys.tables
-					left outer join sys.partitions on tables.object_id = partitions.object_id
-				GROUP by tables.schema_id, lower(tables.[name])
-				--HAVING sum(partitions.rows) != 0
-				ORDER by tables.schema_id, lower(tables.[name]);"""
+				SELECT
+					lower(table_schema) as table_schema,
+					lower(table_name) as table_name,
+					table_rows
+				from
+					information_schema.tables
+				where
+					table_schema = '{0}' /*and table_type = 'BASE TABLE'*/
+				order by
+					lower(table_schema),
+					lower(table_name);""".format(my_database)
 			mysql_cursor.execute(tables_sql_statement)
 
 			# add to my_tables from mysql - change
 			my_tables = array_list()
-			for table in mysql_cursor:
-				my_tables.append(table[1] if table[0] == 'dbo' else '{0}.{1}'.format(table[0], table[1]))
+			for my_table in mysql_cursor:
+				my_tables.append('{0}.{1}'.format(my_table[0], my_table[1]))
 
 			# removes any tables from tables list
 			for table_name in ignore_tables:
@@ -890,8 +890,8 @@ class pg_sql:
 			
 			# when table variable is used
 			if table != '':
-				my_tables.clear()
 				if my_tables.exists(table):
+					my_tables.clear()
 					my_tables.append(table)
 				else:
 					print("Table doesn't exist in database: {0}".format(table))
@@ -901,13 +901,11 @@ class pg_sql:
 				# table timing
 				table_timer = timer()
 
-				# get schema_name & table_name - change
+				# get schema_name & table_name
 				if table_name.count('.') != 0:
 					schema_name = table_name.split('.')[0]
 					table_name = table_name.split('.')[1]
-				else:
-					schema_name = 'dbo'
-
+				
 				print('{0} completed in: '.format(table_name), end='', flush=True)
 
 				# queue drop table statements
@@ -915,38 +913,30 @@ class pg_sql:
 
 				# get table schema - change
 				mysql_cursor.execute("""
-					SELECT --lower(tables.[name]) as table_name,
-						columns.column_id,
-						lower(columns.[name]) as column_name,
+					SELECT
+						ordinal_position,
+				    lower(column_name) as column_name,
 						case
-							when lower(types.[name]) in ('binary', 'image', 'rowversion', 'timestamp', 'varbinary') then 'bytea'
-							when lower(types.[name]) = 'bit' then 'boolean'
-							when lower(types.[name]) = 'datetime' then 'timestamp(3) without time zone'
-							when lower(types.[name]) = 'datetime2' then 'timestamp without time zone'
-							when lower(types.[name]) = 'datetimeoffset' then 'timestamp'
-							when lower(types.[name]) = 'decimal' then 'decimal(' + cast(columns.precision as varchar) + ',' + cast(columns.scale as varchar) + ')'
-							when lower(types.[name]) = 'float' then 'float8'
-							when lower(types.[name]) in ('nchar', 'char') then 'varchar' + case when columns.max_length is not null then '(' + cast(columns.max_length as varchar) + ')' else '' end
-							when lower(types.[name]) in ('ntext', 'text') or lower(types.[name]) in ('nvarchar', 'varchar') and columns.max_length = -1 then 'text'
-							when lower(types.[name]) in ('nvarchar', 'varchar') then 'varchar' + case when columns.max_length is not null then '(' + cast(columns.max_length as varchar) + ')' else '' end
-							when lower(types.[name]) = 'smalldatetime' then 'timestamp(0) without time zone'
-							when lower(types.[name]) = 'smallmoney' then 'money'
-							when lower(types.[name]) = 'time' then 'time without time zone'
-							when lower(types.[name]) = 'tinyint' then 'smallint'
-							when lower(types.[name]) = 'uniqueidentifier' then 'varchar(16)'	--'uuid'
-							when lower(types.[name]) in ('cursor', 'hiearchyid', 'sql_variant', 'table') then ''
-							else lower(types.[name]) end as data_type,
-						case when columns.is_nullable = 1 then 'True' else 'False' end as is_nullable
-					FROM sys.tables
-						inner join sys.columns on tables.object_id = columns.object_id
-						inner join sys.types on columns.system_type_id = types.system_type_id and lower(types.[name]) != 'sysname'
-					WHERE tables.[name] = '{0}'
-					ORDER by tables.[name], columns.column_id;""".format(table_name))
+							when data_type = 'bool' then 'boolean'
+							when data_type = 'tinyint' then 'smallint'
+							when data_type = 'mediumint' then 'int'
+							when data_type = 'float' then 'real'
+							when data_type = 'double' then 'double precision'
+							when data_type = 'time' then 'interval hour to second'
+							when data_type = 'datetime' then 'timestamp without time zone'
+							when data_type = 'timestamp' then 'timestamp with time zone'
+							when data_type = 'tinytext' then 'varchar(255)'
+							when left(data_type, 6) = 'binary' or left(data_type, 9) = 'varbinary' then 'bytea'
+							else data_type end as data_type,
+						case when is_nullable = 'YES' then 'True' else 'False' end as is_nullable
+					from information_schema.columns
+					where table_schema = '{0}' and table_name = '{1}'
+					order by lower(table_name), ordinal_position;""".format(schema_name, table_name))
 
 				# create table string - data schema
 				sql_create = "CREATE table if not exists {0}.{1}(".format(data_schema, table_name)
 
-				# columns (column_id, column_name, data_type, is_nullable) - change
+				# columns (ordinal_posistion, column_name, data_type, is_nullable)
 				for column in mysql_cursor:
 					sql_create += '{0} {1}{2}, '.format(self.__modify_column_name(column[1]), column[2], '' if column[3] == 'True' else ' NOT NULL')
 				# remove last comma and space and replace with );
@@ -998,7 +988,7 @@ class pg_sql:
 				self.sql_remove_empty_tables(data_schema, remove_empty_tables)
 
 			# close cursor & connection
-			#mysql_cursor.close()
+			mysql_cursor.close()
 			mysql_connection.close()
 
 			if len(my_tables) > 1:
