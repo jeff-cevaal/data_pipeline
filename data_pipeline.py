@@ -39,14 +39,14 @@ class pg_sql:
 
 			# read login file
 			with open(os.path.join(os.path.dirname(__file__), 'settings', 'login.toml'), mode='rb') as toml_file:
-				login_info = tomllib.load(toml_file)
+				self.__login_info = tomllib.load(toml_file)
 
 			# constants
-			self.__PG_SERVER = login_info['cloud_pg' if cloud else 'local_pg']['host']
-			self.__PG_PORT = login_info['cloud_pg' if cloud else 'local_pg']['port']
-			self.__PG_USERNAME = login_info['cloud_pg' if cloud else 'local_pg']['user']
-			self.__PG_PASSWORD = login_info['cloud_pg' if cloud else 'local_pg']['password']
-			self.__SSL = login_info['cloud_pg' if cloud else 'local_pg']['ssl']
+			self.__PG_SERVER = self.__login_info['cloud_pg' if cloud else 'local_pg']['host']
+			self.__PG_PORT = self.__login_info['cloud_pg' if cloud else 'local_pg']['port']
+			self.__PG_USERNAME = self.__login_info['cloud_pg' if cloud else 'local_pg']['user']
+			self.__PG_PASSWORD = self.__login_info['cloud_pg' if cloud else 'local_pg']['password']
+			self.__SSL = self.__login_info['cloud_pg' if cloud else 'local_pg']['ssl']
 			self.__ENCODING = 'utf-8'
 			self.__DT_SCHEMA = 'dt'
 			self.__SYS_SCHEMA = 'sys'
@@ -861,10 +861,10 @@ class pg_sql:
 
 			# open database - change
 			mysql_connection = pymsyql.connect(
-						host = login_info['local_mysql']['host'],
+						host = self.__login_info['local_mysql']['host'],
 						database = my_database,
-						user = login_info['local_mysql']['user'],
-						password = login_info['local_mysql']['password'])
+						user = self.__login_info['local_mysql']['user'],
+						password = self.__login_info['local_mysql']['password'])
 			mysql_cursor = mssql_connection.cursor()
 			
 			# get all tables from mssql - change sql statement
@@ -1217,11 +1217,11 @@ class pg_sql:
 
 			# open database
 			mssql_connection = pymssql.connect(
-						host = login_info['local_mssql']['host'],
-						server = login_info['local_mssql']['server'],
+						host = self.__login_info['local_mssql']['host'],
+						server = self.__login_info['local_mssql']['server'],
 						database = ms_database,
-						user = login_info['local_mssql']['user'],
-						password = login_info['local_mssql']['password'],
+						user = self.__login_info['local_mssql']['user'],
+						password = self.__login_info['local_mssql']['password'],
 						#autocommit = True,
 						as_dict = False)
 			mssql_cursor = mssql_connection.cursor()
