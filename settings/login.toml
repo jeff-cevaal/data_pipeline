@@ -14,14 +14,14 @@ user = ""
 password = ""
 ssl = "require"
 
-# local pg login
+# local sql server login
 [local_mssql]
 host = "localhost"
 server = "SQLHOST"
 user = ""
 password = ""
 
-# cloud pg login
+# local mysql login
 [local_mysql]
 host = ""
 user = ""
