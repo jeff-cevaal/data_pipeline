@@ -1,29 +1,25 @@
 """ PG SQL """
 
 # standard library imports
-# import csv			# inside etl_spreadsheet_data()
 import decimal
-# import json
+import json
 import os
 import re
-# import tomllib
-# import time
+import tomllib
+from binascii import hexlify
+from datetime import datetime, date
 
-# from binascii import hexlify	# inside __transform_byte_data()
-from datetime import datetime
 # third party library imports
-# import dbfread	# inside etl_fox_pro_data()
-# import psycopg2	# inside __init__()
-# import psycopg2	# inside __init__() - for 32-bit python
-# import pyexcel	# inside etl_spreadsheet_data()
-# import pyodbc		# inside etl_dataflex_data() dataflex's odbc driver is 32-bit only
-# import pymssql	# inside etl_sql_server_data()
-# import pymysql	# inside etl_mysql_data()
+import dbfread
+import psycopg2
+import pyexcel
+import pyodbc
+import pymssql
+import pymysql
 
 # local library imports
 from utilities import ArrayList
 from utilities import DataLocation
-# from utilities import Debugger
 from utilities import Timer
 
 
@@ -35,63 +31,36 @@ class PgSql:
         database: str,
         schema: str = "sys",
         cloud: bool = False,
-        json: bool = True,
-        pg2: bool = False,
+        toml: bool = True,
         single_exec: bool = False,
         etl_debugger: bool = False,
     ):
         try:
-            # import
-            if pg2:
-                global psycopg2
-                import psycopg2
-            else:
-                global psycopg
-                import psycopg
-
-            if json:
-                import json
-
+            if toml:
+                toml_settings_file = os.path.join(os.path.dirname(__file__), "settings", "login.toml")
                 # read login file
-                with open(
-                    os.path.join(os.path.dirname(__file__), "settings", "login.json"),
-                    mode="r",
-                ) as json_file:
-                    self.__login_info = json.load(json_file)
-                del json_file
-            else:
-                import tomllib
-
-                # read login file
-                with open(
-                    os.path.join(os.path.dirname(__file__), "settings", "login.toml"),
-                    mode="rb",
-                ) as toml_file:
+                with open(toml_settings_file, "rb") as toml_file:
                     self.__login_info = tomllib.load(toml_file)
-                del toml_file
+            else:
+                json_settings_file = os.path.join(os.path.dirname(__file__), "settings", "login.json")
+                # read login file
+                with open(json_settings_file, "r", encoding="utf-8") as json_file:
+                    self.__login_info = json.load(json_file)
 
-            # constants
-            self.__pg_server = self.__login_info["cloud_pg" if cloud else "local_pg"][
-                "host"
-            ]
-            self.__pg_port = self.__login_info["cloud_pg" if cloud else "local_pg"][
-                "port"
-            ]
-            self.__pg_username = self.__login_info["cloud_pg" if cloud else "local_pg"][
-                "user"
-            ]
-            self.__pg_password = self.__login_info["cloud_pg" if cloud else "local_pg"][
-                "password"
-            ]
+            # get login credentials
+            self.__pg_server = self.__login_info["cloud_pg" if cloud else "local_pg"]["host"]
+            self.__pg_port = self.__login_info["cloud_pg" if cloud else "local_pg"]["port"]
+            self.__pg_username = self.__login_info["cloud_pg" if cloud else "local_pg"]["user"]
+            self.__pg_password = self.__login_info["cloud_pg" if cloud else "local_pg"]["password"]
             self.__ssl = self.__login_info["cloud_pg" if cloud else "local_pg"]["ssl"]
+            # constants
             self.__encoding = "utf-8"
             self.__dt_schema = "dt"
             self.__sys_schema = "sys"
             self.__sql_schema = "sql_"
             self.__pg_default_db = "postgres"
-            self.__sql_string_maximum = (
-                100000000  # larger than 230,000,000 creates a string failure
-            )
+            self.__sql_string_maximum = 100000000  # larger than 230,000,000 creates a string failure
+
             # used for translation step
             if single_exec:
                 self.__semicolon_maximum = 1
@@ -100,9 +69,7 @@ class PgSql:
                 self.__semicolon_maximum = 2
             # else normal operation
             else:
-                self.__semicolon_maximum = (
-                    500  # to small ~< 100 and to big ~> 800 it becomes slower
-                )
+                self.__semicolon_maximum = 500  # to small ~< 100 and to big ~> 800 it becomes slower
             self.__reserved_keywords = ArrayList()
 
             # variables
@@ -114,61 +81,37 @@ class PgSql:
             self.__log_written = ArrayList()
 
             # check if database exists
-            if pg2:
-                self.__pg_sql_connection = psycopg2.connect(
-                    host=self.__pg_server,
-                    port=self.__pg_port,
-                    user=self.__pg_username,
-                    password=self.__pg_password,
-                    database=self.__pg_default_db,
-                    sslmode=self.__ssl,
-                )
-            else:
-                self.__pg_sql_connection = psycopg.connect(
-                    host=self.__pg_server,
-                    port=self.__pg_port,
-                    user=self.__pg_username,
-                    password=self.__pg_password,
-                    dbname=self.__pg_default_db,
-                    sslmode=self.__ssl,
-                )
+            self.__pg_sql_connection = psycopg2.connect(
+                host=self.__pg_server,
+                port=self.__pg_port,
+                user=self.__pg_username,
+                password=self.__pg_password,
+                database=self.__pg_default_db,
+                sslmode=self.__ssl,
+            )
             self.__pg_sql_connection.autocommit = True
 
             # check if database exists or not
             self.__pg_sql_cursor = self.__pg_sql_connection.cursor()
-            self.__pg_sql_cursor.execute(
-                f"select datname from pg_catalog.pg_database where datname = '{database}';"
-            )
+            self.__pg_sql_cursor.execute(f"select datname from pg_catalog.pg_database where datname = '{database}';")
             # create database if empty rowcount
             if self.__pg_sql_cursor.rowcount == 0:
                 self.__pg_sql_cursor.execute(f'create database "{database}";')
 
             # get reserved keywords - constant
-            self.__pg_sql_cursor.execute(
-                "select word from pg_get_keywords() where catcode in ('R', 'T');"
-            )
+            self.__pg_sql_cursor.execute("select word from pg_get_keywords() where catcode in ('R', 'T');")
             for keyword in self.__pg_sql_cursor.fetchall():
                 self.__reserved_keywords.append(keyword[0])
 
             # connect to database
-            if pg2:
-                self.__pg_connection = psycopg2.connect(
-                    host=self.__pg_server,
-                    port=self.__pg_port,
-                    user=self.__pg_username,
-                    password=self.__pg_password,
-                    database=self.__pg_database,
-                    sslmode=self.__ssl,
-                )
-            else:
-                self.__pg_connection = psycopg.connect(
-                    host=self.__pg_server,
-                    port=self.__pg_port,
-                    user=self.__pg_username,
-                    password=self.__pg_password,
-                    dbname=self.__pg_database,
-                    sslmode=self.__ssl,
-                )
+            self.__pg_connection = psycopg2.connect(
+                host=self.__pg_server,
+                port=self.__pg_port,
+                user=self.__pg_username,
+                password=self.__pg_password,
+                database=self.__pg_database,
+                sslmode=self.__ssl,
+            )
             self.__pg_connection.autocommit = True
             self.__pg_cursor = self.__pg_connection.cursor()
 
@@ -202,12 +145,13 @@ class PgSql:
 
             # create sys schema
             self.__pg_cursor.execute(
-                f"select schema_name from information_schema.schemata where schema_name = '{self.__sys_schema}';"
+                f"""
+                    select schema_name
+                    from information_schema.schemata
+                    where schema_name = '{self.__sys_schema}';"""
             )
             if self.__pg_cursor.rowcount == 0:
-                self.__pg_cursor.execute(
-                    f"create schema if not exists {self.__sys_schema};"
-                )
+                self.__pg_cursor.execute(f"create schema if not exists {self.__sys_schema};")
                 sys_created = True
 
             log_created = False
@@ -226,19 +170,15 @@ class PgSql:
                 self.__log_queue.append(
                     f'{self.__sys_schema}~~schema created~{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
                 )
-            if sys_created:
                 self.__log_queue.append(
                     f'{self.__sys_schema}~log~table created~{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
                 )
+                log_created = True
         except Exception as error:
             raise error
 
     def __create_table_statements(
-        self,
-        data_schema: str,
-        table_name: str,
-        sql_create: str,
-        create_sql_schema: bool = True,
+        self, data_schema: str, table_name: str, sql_create: str, create_sql_schema: bool = True
     ):
         """ETL - Makes create table statements"""
         try:
@@ -258,16 +198,12 @@ class PgSql:
         except Exception as error:
             raise error
 
-    def __drop_table_statements(
-        self, data_schema: str, table_name: str, create_sql_schema: bool = True
-    ) -> str:
+    def __drop_table_statements(self, data_schema: str, table_name: str, create_sql_schema: bool = True) -> str:
         """ETL - Makes drop table statements"""
         try:
             # sql_[data_type] schema
             if create_sql_schema:
-                self.sql_queue_exec(
-                    f"drop table if exists {self.__sql_schema + data_schema}.{table_name} cascade;"
-                )
+                self.sql_queue_exec(f"drop table if exists {self.__sql_schema + data_schema}.{table_name} cascade;")
 
             # data schema
             sql_drop = f"drop table if exists {data_schema}.{table_name} cascade;"
@@ -283,12 +219,10 @@ class PgSql:
             # queue in log ArrayList
             self.__queue_log(sql_line)
 
-            # set sql_statements and semicolon_count if under string maximum or current sql_line is greater than string maximum
-            if len(self.__sql_statements) + len(
-                sql_line
-            ) <= self.__sql_string_maximum or (
-                self.__sql_statements == ""
-                and len(sql_line) > self.__sql_string_maximum
+            # set sql_statements and semicolon_count if under string maximum
+            #   or current sql_line is greater than string maximum
+            if len(self.__sql_statements) + len(sql_line) <= self.__sql_string_maximum or (
+                self.__sql_statements == "" and len(sql_line) > self.__sql_string_maximum
             ):
                 self.__sql_statements += sql_line
                 self.__semicolon_count += 1
@@ -297,8 +231,7 @@ class PgSql:
             # semicolon count reaches max constant or string length max then execute sql string
             if (
                 self.__semicolon_count == self.__semicolon_maximum
-                or len(self.__sql_statements) + len(sql_line)
-                > self.__sql_string_maximum
+                or len(self.__sql_statements) + len(sql_line) > self.__sql_string_maximum
             ):
                 self.__insert_log()
                 self.__pg_cursor.execute(self.__sql_statements)
@@ -307,30 +240,20 @@ class PgSql:
         except Exception as error:
             raise error
 
-    def __init_pg_sql_connection(self, database: str = "postgres", pg2: bool = True):
+    def __init_pg_sql_connection(self, database: str = "postgres"):
         """Initialize another connection for independent data usage"""
         try:
             # if already connected to the database
             if str(self.__pg_sql_cursor.connection).count(database) == 0:
                 # new connection for getting sql.table data
-                if pg2:
-                    self.__pg_sql_connection = psycopg2.connect(
-                        host=self.__pg_server,
-                        port=self.__pg_port,
-                        user=self.__pg_username,
-                        password=self.__pg_password,
-                        database=database,
-                        sslmode=self.__ssl,
-                    )
-                else:
-                    self.__pg_sql_connection = psycopg.connect(
-                        host=self.__pg_server,
-                        port=self.__pg_port,
-                        user=self.__pg_username,
-                        password=self.__pg_password,
-                        dbname=database,
-                        sslmode=self.__ssl,
-                    )
+                self.__pg_sql_connection = psycopg2.connect(
+                    host=self.__pg_server,
+                    port=self.__pg_port,
+                    user=self.__pg_username,
+                    password=self.__pg_password,
+                    database=database,
+                    sslmode=self.__ssl,
+                )
                 self.__pg_sql_connection.autocommit = True
 
                 # connection -> cursor
@@ -338,20 +261,15 @@ class PgSql:
         except Exception as error:
             raise error
 
-    def __insert_into_statements(
-        self,
-        data_schema: str,
-        table_name: str,
-        sql_row: str,
-        create_sql_schema: bool = True,
-    ):
+    def __insert_into_statements(self, data_schema: str, table_name: str, sql_row: str, create_sql_schema: bool = True):
         """ETL - Makes insert into statements"""
         try:
             # sql_[data_type] schema
             sql_insert = f"insert into {data_schema}.{table_name} values ({sql_row});"
             if create_sql_schema:
                 self.sql_queue_exec(
-                    f"insert into {self.__sql_schema + data_schema}.{table_name} (sorting, data) VALUES (3, {0});".format(
+                    f"""insert into {self.__sql_schema + data_schema}.{table_name}
+                        (sorting, data) VALUES (3, {0});""".format(
                         sql_insert.replace("'", "''")
                     )
                 )
@@ -376,7 +294,9 @@ class PgSql:
 
                 # inserts into log table from self.__log_queue
                 self.__pg_cursor.execute(
-                    f"insert into {self.__sys_schema}.log (db_schema, db_table, description, start) values ('{log[0]}', '{log[1]}', '{log[2]}', '{log[3]}')"
+                    f"""insert into {self.__sys_schema}.log
+                        (db_schema, db_table, description, start)
+                        values ('{log[0]}', '{log[1]}', '{log[2]}', '{log[3]}')"""
                 )
         except Exception as error:
             raise error
@@ -388,9 +308,9 @@ class PgSql:
             column = re.sub("\\W+", "_", column)
 
             if self.__reserved_keywords.exists(column):
-                return column + "_"
-            else:
-                return column
+                column += "_"
+
+            return column
         except Exception as error:
             raise error
 
@@ -401,13 +321,9 @@ class PgSql:
             time_stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             # only log sql queries that use a schema.table syntax
-            sql_schema_table = re.findall(
-                "from \\w+\\.\\w+", str(sql_statement), flags=re.IGNORECASE
-            )
+            sql_schema_table = re.findall("from \\w+\\.\\w+", str(sql_statement), flags=re.IGNORECASE)
             if len(sql_schema_table) > 1:
-                sql_schema = re.sub(
-                    "from ", "", sql_schema_table[0].split(".")[0], flags=re.IGNORECASE
-                )
+                sql_schema = re.sub("from ", "", sql_schema_table[0].split(".")[0], flags=re.IGNORECASE)
                 sql_table = sql_schema_table[0].split(".")[1]
 
                 # add to log_queue ArrayList when sql_schema & sql_table are not empty
@@ -415,83 +331,43 @@ class PgSql:
                     # create table
                     if str(sql_statement).lower().startswith("create table"):
                         description = "table created"
-                        if not self.__check_log(
-                            f"{sql_schema}~{sql_table}~{description}"
-                        ):
-                            self.__log_queue.append(
-                                f"{sql_schema}~{sql_table}~{description}~{time_stamp}"
-                            )
+                        if not self.__check_log(f"{sql_schema}~{sql_table}~{description}"):
+                            self.__log_queue.append(f"{sql_schema}~{sql_table}~{description}~{time_stamp}")
                     # delete from
                     elif str(sql_statement).lower().startswith("delete from"):
                         description = "values deleted"
-                        if not self.__check_log(
-                            f"{sql_schema}~{sql_table}~{description}"
-                        ):
-                            self.__log_queue.append(
-                                f"{sql_schema}~{sql_table}~{description}~{time_stamp}"
-                            )
+                        if not self.__check_log(f"{sql_schema}~{sql_table}~{description}"):
+                            self.__log_queue.append(f"{sql_schema}~{sql_table}~{description}~{time_stamp}")
                     # drop table
                     elif str(sql_statement).lower().startswith("drop table"):
                         description = "table dropped"
-                        if not self.__check_log(
-                            f"{sql_schema}~{sql_table}~{description}"
-                        ):
-                            self.__log_queue.append(
-                                f"{sql_schema}~{sql_table}~{description}~{time_stamp}"
-                            )
+                        if not self.__check_log(f"{sql_schema}~{sql_table}~{description}"):
+                            self.__log_queue.append(f"{sql_schema}~{sql_table}~{description}~{time_stamp}")
                     # function
                     elif str(sql_statement).lower().startswith("drop function"):
                         description = "function dropped"
-                        if not self.__check_log(
-                            f"{sql_schema}~{sql_table}~{description}"
-                        ):
-                            self.__log_queue.append(
-                                f"{sql_schema}~{sql_table}~{description}~{time_stamp}"
-                            )
-                            self.__log_queue.append(
-                                f"{sql_schema}~{sql_table}~function created~{time_stamp}"
-                            )
+                        if not self.__check_log(f"{sql_schema}~{sql_table}~{description}"):
+                            self.__log_queue.append(f"{sql_schema}~{sql_table}~{description}~{time_stamp}")
+                            self.__log_queue.append(f"{sql_schema}~{sql_table}~function created~{time_stamp}")
                     # insert
                     elif str(sql_statement).lower().startswith("insert into"):
                         description = "values inserted"
-                        if not self.__check_log(
-                            f"{sql_schema}~{sql_table}~{description}"
-                        ):
-                            self.__log_queue.append(
-                                f"{sql_schema}~{sql_table}~{description}~{time_stamp}"
-                            )
+                        if not self.__check_log(f"{sql_schema}~{sql_table}~{description}"):
+                            self.__log_queue.append(f"{sql_schema}~{sql_table}~{description}~{time_stamp}")
                     # update
                     elif str(sql_statement).lower().startswith("update"):
                         description = "values updated"
-                        if not self.__check_log(
-                            f"{sql_schema}~{sql_table}~{description}"
-                        ):
-                            self.__log_queue.append(
-                                f"{sql_schema}~{sql_table}~{description}~{time_stamp}"
-                            )
+                        if not self.__check_log(f"{sql_schema}~{sql_table}~{description}"):
+                            self.__log_queue.append(f"{sql_schema}~{sql_table}~{description}~{time_stamp}")
             # renaming schema
-            elif (
-                len(
-                    re.findall(
-                        "alter schema \\w+ rename to \\w;",
-                        str(sql_statement),
-                        flags=re.IGNORECASE,
-                    )
-                )
-                > 0
-            ):
+            elif len(re.findall("alter schema \\w+ rename to \\w;", str(sql_statement), flags=re.IGNORECASE)) > 0:
                 sql_schema = re.sub(
-                    "alter schema ",
-                    "",
-                    str(sql_statement).split(" rename", maxsplit=1)[0],
-                    flags=re.IGNORECASE,
+                    "alter schema ", "", str(sql_statement).split(" rename", maxsplit=1)[0], flags=re.IGNORECASE
                 )
                 sql_table = ""
                 description = "schema renamed"
                 if not self.__check_log(f"{sql_schema}~{sql_table}~{description}"):
-                    self.__log_queue.append(
-                        f"{sql_schema}~{sql_table}~{description}~{time_stamp}"
-                    )
+                    self.__log_queue.append(f"{sql_schema}~{sql_table}~{description}~{time_stamp}")
         except Exception as error:
             raise error
 
@@ -501,81 +377,81 @@ class PgSql:
             # billing address
             sql_statement = f"""
                 create table if not exists {schema}.billing_address (
-                        id serial,
-                        account_num varchar(7) default '',
-                        branch_num varchar(5) default '',
-                        ref_num varchar(12) default '',
-                        street_address_1 text default '',
-                        street_address_2 text default '',
-                        city text default '',
-                        state text default '',
-                        zip varchar(10) default '',
-                        country varchar(3) default '',
-                        inactive boolean default false,
-                        comments text default '');"""
+                    id serial,
+                    account_num varchar(7) default '',
+                    branch_num varchar(5) default '',
+                    ref_num varchar(12) default '',
+                    street_address_1 text default '',
+                    street_address_2 text default '',
+                    city text default '',
+                    state text default '',
+                    zip varchar(10) default '',
+                    country varchar(3) default '',
+                    inactive boolean default false,
+                    comments text default '');"""
 
             # contact
             sql_statement += f"""
                 create table if not exists {schema}.contact (
-                        id serial,
-                        account_num varchar(7) default '',
-                        address_num numeric(4,0) default 0,
-                        branch_num varchar(5) default '',
-                        company_name text default '',
-                        first_name text default '',
-                        last_name text default '',
-                        attention_line text default '',
-                        title text default '',
-                        gender varchar(1) default '',
-                        inactive boolean default false,
-                        comments text default '');"""
+                    id serial,
+                    account_num varchar(7) default '',
+                    address_num numeric(4,0) default 0,
+                    branch_num varchar(5) default '',
+                    company_name text default '',
+                    first_name text default '',
+                    last_name text default '',
+                    attention_line text default '',
+                    title text default '',
+                    gender varchar(1) default '',
+                    inactive boolean default false,
+                    comments text default '');"""
 
             # email
             sql_statement += f"""
                 create table if not exists {schema}.email (
-                        id serial,
-                        account_num varchar(7) default '',
-                        address_num numeric(4,0) default 0,
-                        branch_num varchar(5) default '',
-                        email text default '',
-                        billing boolean default false,
-                        receiving boolean default false,
-                        inactive boolean default false,
-                        comments text default '');"""
+                    id serial,
+                    account_num varchar(7) default '',
+                    address_num numeric(4,0) default 0,
+                    branch_num varchar(5) default '',
+                    email text default '',
+                    billing boolean default false,
+                    receiving boolean default false,
+                    inactive boolean default false,
+                    comments text default '');"""
 
             # phone
             sql_statement += f"""
                 create table if not exists {schema}.phone (
-                        id serial,
-                        account_num varchar(7) default '',
-                        address_num numeric(4,0) default 0,
-                        branch_num varchar(5) default '',
-                        phone text default '',
-                        ext text default '',
-                        type text default '',
-                        texting boolean default false,
-                        autodial boolean default false,
-                        inactive boolean default false,
-                        comments text default '');"""
+                    id serial,
+                    account_num varchar(7) default '',
+                    address_num numeric(4,0) default 0,
+                    branch_num varchar(5) default '',
+                    phone text default '',
+                    ext text default '',
+                    type text default '',
+                    texting boolean default false,
+                    autodial boolean default false,
+                    inactive boolean default false,
+                    comments text default '');"""
 
             # service address
             sql_statement += f"""
                 create table if not exists {schema}.service_address (
-                        id serial,
-                        account_num varchar(7) default '',
-                        address_num numeric(4,0) default 0,
-                        branch_num varchar(5) default '',
-                        ref_num varchar(12) default '',
-                        street_address_1 text default '',
-                        street_address_2 text default '',
-                        city text default '',
-                        state text default '',
-                        zip varchar(10) default '',
-                        country varchar(3) default '',
-                        latitude numeric(12,8) default 0,
-                        longitude numeric(12,8) default 0,
-                        inactive boolean default false,
-                        comments text default '');"""
+                    id serial,
+                    account_num varchar(7) default '',
+                    address_num numeric(4,0) default 0,
+                    branch_num varchar(5) default '',
+                    ref_num varchar(12) default '',
+                    street_address_1 text default '',
+                    street_address_2 text default '',
+                    city text default '',
+                    state text default '',
+                    zip varchar(10) default '',
+                    country varchar(3) default '',
+                    latitude numeric(12,8) default 0,
+                    longitude numeric(12,8) default 0,
+                    inactive boolean default false,
+                    comments text default '');"""
 
             return sql_statement
         except Exception as error:
@@ -586,11 +462,11 @@ class PgSql:
         try:
             return f"""
                 create table if not exists {self.__sys_schema}.log (
-                        id serial,
-                        db_schema varchar(63) default '',
-                        db_table varchar(63) default '',
-                        description varchar(50) default '',
-                        start timestamp);"""
+                    id serial,
+                    db_schema varchar(63) default '',
+                    db_table varchar(63) default '',
+                    description varchar(50) default '',
+                    start timestamp);"""
         except Exception as error:
             raise error
 
@@ -599,17 +475,14 @@ class PgSql:
         try:
             return f"""
                 create table if not exists {self.__sql_schema + schema}.{table} (
-                        id serial,
-                        sorting int default 0,
-                        data text default '');"""
+                    id serial,
+                    sorting int default 0,
+                    data text default '');"""
         except Exception as error:
             raise error
 
-    def __sql_table_setup(
-        self, data_schema: str, table_name: str, sql_drop: str, sql_create: str
-    ):
-        """ETL - Insert into sql_[data_schema] drop & create
-        delayed until sql_[data_type].table is setup"""
+    def __sql_table_setup(self, data_schema: str, table_name: str, sql_drop: str, sql_create: str):
+        """ETL - Insert into sql_[data_schema] drop & create, delayed until sql_[data_type].table is setup"""
         try:
             # sql_[data_type] schema
             self.sql_queue_exec(
@@ -625,23 +498,21 @@ class PgSql:
                     (sorting, data) values (2, '{0}');""".format(
                     sql_create.replace("'", "''")
                 ),
-                exec=True,
+                execute=True,
             )
         except Exception as error:
             raise error
 
     def __transform_byte_data(self, byte_data: bytes) -> str:
-        """ETL - Formats byte data for pg_sql"""
+        """ETL - Formats byte data for postgresql"""
         try:
-            from binascii import hexlify
-
             # converts bytes data into proper hex then into a string
             return f"'\\x{hexlify(byte_data).decode(self.__encoding)}'::bytea"
         except Exception as error:
             raise error
 
     def __transform_string_data(self, str_data: str) -> str:
-        """ETL - Formats string data for pg_sql"""
+        """ETL - Formats string data for postgresql"""
         try:
             # Remove spaces
             str_data = str_data.rstrip()
@@ -653,18 +524,16 @@ class PgSql:
                 str_data,
                 flags=re.IGNORECASE,
             )
-            # str_data = re.sub(r"\x09", '\t', str_data, flags=re.IGNORECASE)	# tab
-            # str_data = re.sub(r"\x0A", '\n', str_data, flags=re.IGNORECASE)	# newline / line feed
-            # str_data = re.sub(r"\x0D", '\r', str_data, flags=re.IGNORECASE)	# carriage return
+            # str_data = re.sub(r"\x09", '\t', str_data, flags=re.IGNORECASE) # tab
+            # str_data = re.sub(r"\x0A", '\n', str_data, flags=re.IGNORECASE) # newline / line feed
+            # str_data = re.sub(r"\x0D", '\r', str_data, flags=re.IGNORECASE) # carriage return
             str_data = re.sub(
                 r"\x10|\x11|\x12|\x13|\x14|\x15|\x16|\x17|\x18|\x19|\x1A|\x1B|\x1C|\x1D|\x1E|\x1F",
                 "",
                 str_data,
                 flags=re.IGNORECASE,
             )
-            str_data = re.sub(
-                r"\x5C", "\\\\\\\\", str_data, flags=re.IGNORECASE
-            )  # backslash
+            str_data = re.sub(r"\x5C", "\\\\\\\\", str_data, flags=re.IGNORECASE)  # backslash
             str_data = re.sub(r"\x7F", "", str_data, flags=re.IGNORECASE)  # delete
             str_data = re.sub(
                 r"\x80|\x81|\x82|\x83|\x84|\x85|\x86|\x87|\x88|\x89|\x8A|\x8B|\x8C|\x8D|\x8E|\x8F",
@@ -731,22 +600,25 @@ class PgSql:
             self.__pg_connection.close()
 
             # psql
-            self.__psql_cursor.close()
-            self.__psql_connection.close()
+            self.__pg_sql_cursor.close()
+            self.__pg_sql_connection.close()
         except Exception as error:
             raise error
 
     def create_data_transfer_schema(self, schema: str = "dt"):
         """Creates data transfer schema"""
         try:
-            self.sql_queue_exec(self.__sql_data_transfer(schema), exec=True)
+            self.sql_queue_exec(self.__sql_data_transfer(schema), execute=True)
         except Exception as error:
             raise error
 
     def create_schema(self, schema: str):
         """Creates the schema if it doesn't exist"""
         try:
-            schema_string = f"select schema_name from information_schema.schemata where schema_name = '{schema}'"
+            schema_string = f"""
+                select schema_name
+                from information_schema.schemata
+                where schema_name = '{schema}'"""
             if self.sql_count(schema_string) == 0:
                 # sys.log inserting
                 if schema != self.__sys_schema:
@@ -764,7 +636,7 @@ class PgSql:
     def create_system_defaults(self, schema: str = "dt", version: str = ""):
         """Creates all pgsql functions"""
         try:
-            system_defaults_Timer = Timer()
+            system_defaults_timer = Timer()
 
             # create sys schema
             self.create_schema(self.__sys_schema)
@@ -774,8 +646,8 @@ class PgSql:
 
             print("Creating sys functions in: ", end="", flush=True)
             # get all pgsql functions
-            self.__pg_sql_cursor.execute(f"select * from {self.__sys_schema}.functions")
-            # creates function definition from pgsql.functions
+            self.__pg_sql_cursor.execute(f"select * from {self.__sys_schema}.function")
+            # creates function definition from pgsql.function
             for function in self.__pg_sql_cursor:
                 if function[0] == "sql":
                     function_str = f"""
@@ -797,25 +669,22 @@ class PgSql:
                             \n$$;"""
                 # build function into sys schema
                 self.sql_queue_exec(function_str)
-            system_defaults_Timer.print_time()
+            system_defaults_timer.print_time()
         except Exception as error:
             raise error
         finally:
-            system_defaults_Timer.print_time("Total system defaults created in: ")
+            system_defaults_timer.print_time("Total system defaults created in: ")
 
     def etl_dataflex_data(
         self,
         path: str,
-        file: str = "",
+        file_name: str = "",
         data_schema: str = "dflex",
         remove_empty_tables: bool = True,
         ignore_tables: ArrayList = ArrayList(),
     ):
         """Processing dataflex data"""
         try:
-            # third party library import
-            import pyodbc
-
             # total timing
             total_timer = Timer()
 
@@ -827,33 +696,32 @@ class PgSql:
             self.create_schema(data_schema)
 
             # set location
-            location = DataLocation(path, file, ["vld"])
+            location = DataLocation(path, file_name, ["vld"])
 
             # removes any tables from location list
             for table_name in ignore_tables:
                 location.get_file_list().remove(table_name.lower())
 
             # loop thru file list
-            for file in location.get_file_list():
+            for file_name_list in location.get_file_list():
                 # table timing
                 table_timer = Timer()
 
-                table_name = file.split(".")[0]
+                table_name = file_name_list.split(".")[0]
                 print(f"{table_name} completed in: ", end="", flush=True)
 
                 # queue drop table statements
                 sql_drop = self.__drop_table_statements(data_schema, table_name)
 
                 # open table
-                odbc_connection = pyodbc.connect(
-                    f"DRIVER={0};DBQ={path}".format("{DataFlex Driver}")
-                )
+                odbc_connection = pyodbc.connect(f"DRIVER={0};DBQ={path}".format("{DataFlex Driver}"))
                 odbc_cursor = odbc_connection.cursor()
                 odbc_cursor.execute(f"select * from {table_name}")
 
                 # create table string - data schema
                 sql_create = f"create table if not exists {data_schema}.{table_name}("
-                # columns in description (name, type_code, display_size, internal_size, precision, scale, null_ok)
+                # columns in description
+                #   (name, type_code, display_size, internal_size, precision, scale, null_ok)
                 for column in odbc_cursor.description:
                     # creates column name
                     sql_create += f'"{self.__modify_column_name(column[0].lower())}" '
@@ -891,21 +759,19 @@ class PgSql:
                             sql_row += f"{self.__transform_byte_data(column)}, "
                         # strings & dates
                         else:
-                            sql_row += (
-                                f"E'{self.__transform_string_data(str(column))}', "
-                            )
+                            sql_row += f"E'{self.__transform_string_data(str(column))}', "
                     # remove last comma and space
                     sql_row = sql_row.rstrip(", ")
                     # queue insert into statements
                     self.__insert_into_statements(data_schema, table_name, sql_row)
 
                 # execute anything left in the queue
-                self.sql_queue_exec(exec=True)
+                self.sql_queue_exec(execute=True)
 
                 # close table
                 odbc_cursor.close()
 
-                # print table Timer
+                # print table timer
                 table_timer.print_time()
 
             # vacuums
@@ -920,26 +786,21 @@ class PgSql:
                 odbc_connection.close()
 
             if len(location.get_file_list()) > 1:
-                # print total Timer
-                total_timer.print_time(
-                    "Total conversion of dataflex data completed in: "
-                )
+                # print total timer
+                total_timer.print_time("Total conversion of dataflex data completed in: ")
         except Exception as error:
             raise error
 
     def etl_fox_pro_data(
         self,
         path: str,
-        file: str = "",
+        file_name: str = "",
         data_schema: str = "vfp",
         remove_empty_tables: bool = True,
         ignore_tables: ArrayList = ArrayList(),
     ):
         """Processing fox pro data"""
         try:
-            # third party library import
-            import dbfread
-
             # constants
             default_encoding = "cp1252"
 
@@ -955,28 +816,26 @@ class PgSql:
             self.create_schema(data_schema)
 
             # set location
-            location = DataLocation(path, file, ["dbf"])
+            location = DataLocation(path, file_name, ["dbf"])
 
             # removes any tables from location list
             for table_name in ignore_tables:
                 location.get_file_list().remove(table_name.lower())
 
             # loop thru file list
-            for file in location.get_file_list():
+            for file_name_list in location.get_file_list():
                 # table timing
                 table_timer = Timer()
 
-                table_name = file.split(".")[0]
+                table_name = file_name_list.split(".")[0]
                 print(f"{table_name} completed in: ", end="", flush=True)
 
                 # queue drop table statements
-                sql_drop = self.__drop_table_statements(
-                    data_schema, table_name, normal_fox_pro_operation
-                )
+                sql_drop = self.__drop_table_statements(data_schema, table_name, normal_fox_pro_operation)
 
                 # open table
                 dbf_cursor = dbfread.DBF(
-                    filename=os.path.join(path, file),
+                    filename=os.path.join(path, file_name_list),
                     encoding=default_encoding,
                     lowernames=True,
                     load=True,
@@ -989,31 +848,25 @@ class PgSql:
 
                 # get field definitions
                 for field in dbf_cursor.fields:
-                    if field.type == "C" or field.type == "V":
-                        sql_create += (
-                            f'"{self.__modify_column_name(field.name)}" varchar({field.length})'
-                            + " not NULL default '', "
-                        )
+                    if field.type in ("C", "V"):
+                        sql_create += f'"{self.__modify_column_name(field.name)}" '
+                        sql_create += f"varchar({field.length})" + " not NULL default '', "
                         table_fields.append("string")
                     elif field.type == "L":
-                        sql_create += (
-                            f'"{self.__modify_column_name(field.name)}" boolean'
-                            + " not NULL default false, "
-                        )
+                        sql_create += f'"{self.__modify_column_name(field.name)}" boolean not NULL default false, '
                         table_fields.append("boolean")
                     elif field.type == "D":
-                        sql_create += (
-                            f'"{self.__modify_column_name(field.name)}" date NULL, '
-                        )
+                        sql_create += f'"{self.__modify_column_name(field.name)}" date NULL, '
                         table_fields.append("date")
-                    elif field.type == "T" or field.type == "@":
+                    elif field.type in ("T", "@"):
                         sql_create += f'"{self.__modify_column_name(field.name)}" timestamp NULL, '
                         table_fields.append("date")
-                    elif field.type == "I" or field.type == "+":
+                    elif field.type in ("I", "+"):
                         sql_create += f'"{self.__modify_column_name(field.name)}" integer not NULL default 0, '
                         table_fields.append("number")
                     elif field.type == "N":
-                        sql_create += f'"{self.__modify_column_name(field.name)}" numeric({field.length},{field.decimal_count}) not NULL default 0, '
+                        sql_create += f'"{self.__modify_column_name(field.name)}" '
+                        sql_create += f"numeric({field.length},{field.decimal_count}) not NULL default 0, "
                         table_fields.append("decimal")
                     elif field.type == "F":
                         sql_create += f'"{self.__modify_column_name(field.name)}" float4 not NULL default 0, '
@@ -1022,13 +875,12 @@ class PgSql:
                         sql_create += f'"{self.__modify_column_name(field.name)}" float8 not NULL default 0, '
                         table_fields.append("number")
                     elif field.type == "Y":
-                        sql_create += f'"{self.__modify_column_name(field.name)}" decimal({field.length + field.decimal_count},{field.decimal_count}) not NULL default 0, '
+                        sql_create += f'"{self.__modify_column_name(field.name)}" '
+                        sql_create += f"decimal({field.length + field.decimal_count},{field.decimal_count}) "
+                        sql_create += "not NULL default 0, "
                         table_fields.append("decimal")
                     elif field.type == "M":
-                        sql_create += (
-                            f'"{self.__modify_column_name(field.name)}" text'
-                            + " not NULL default '', "
-                        )
+                        sql_create += f'"{self.__modify_column_name(field.name)}" ' + "text not NULL default '', "
                         table_fields.append("string")
                     else:
                         table_fields.append("invalid")
@@ -1036,9 +888,7 @@ class PgSql:
                 # remove last comma and space and replace with );
                 sql_create = sql_create.rstrip(", ") + ");"
                 # queue create table statements
-                self.__create_table_statements(
-                    data_schema, table_name, sql_create, normal_fox_pro_operation
-                )
+                self.__create_table_statements(data_schema, table_name, sql_create, normal_fox_pro_operation)
 
                 # write drop & create statments after sql_[data_type].table is setup
                 self.__sql_table_setup(data_schema, table_name, sql_drop, sql_create)
@@ -1069,15 +919,20 @@ class PgSql:
                             elif table_fields[column_count] == "decimal":
                                 if column[1] is None:
                                     sql_row += f"{0}, "
-                                # vfp can do 1,000,000.000 is valid in numeric(10, 4) but psql can only have 999,999.9999
+                                # vfp can do 1,000,000.000 is valid in numeric(10, 4)
+                                #   but pgsql can only have 999,999.9999
                                 elif (
                                     len(str(column[1]).split(".", maxsplit=1)[0])
                                     > dbf_cursor.fields[column_count].length
                                     - dbf_cursor.fields[column_count].decimal_count
                                 ):
-                                    sql_row += f"{float('9' * (dbf_cursor.fields[column_count].length - dbf_cursor.fields[column_count].decimal_count) + '.' + '9' * dbf_cursor.fields[column_count].decimal_count)}, "
+                                    sql_row += f"""
+                                            {float('9' * (dbf_cursor.fields[column_count].length
+                                                - dbf_cursor.fields[column_count].decimal_count)
+                                            + '.' + '9' * dbf_cursor.fields[column_count].decimal_count)}, """
                                 else:
-                                    sql_row += f"{str(column[1]).strip()[0 : dbf_cursor.fields[column_count].length]}, "
+                                    sql_row += f"""
+                                            {str(column[1]).strip()[0 : dbf_cursor.fields[column_count].length]}, """
                             # string
                             elif table_fields[column_count] == "string":
                                 if column[1] is not None:
@@ -1091,25 +946,19 @@ class PgSql:
                             elif table_fields[column_count] == "date":
                                 sql_row += f"'{column[1]}', "
                         column_count += 1
-                    # special exception - adding record_number to the end of sql_row
-                    if file == "fields.dbf":
-                        sql_row += f"{record_number}"
-                        record_number += 1
-                    else:
-                        # remove last comma and space
-                        sql_row = sql_row.rstrip(", ")
+
+                    # remove last comma and space
+                    sql_row = sql_row.rstrip(", ")
                     # queue insert into statements
-                    self.__insert_into_statements(
-                        data_schema, table_name, sql_row, normal_fox_pro_operation
-                    )
+                    self.__insert_into_statements(data_schema, table_name, sql_row, normal_fox_pro_operation)
 
                 # execute anything left in the queue
-                self.sql_queue_exec(exec=True)
+                self.sql_queue_exec(execute=True)
 
                 # close table
                 dbf_cursor = ""
 
-                # print table Timer
+                # print table timer
                 table_timer.print_time()
 
             # vacuums
@@ -1118,10 +967,8 @@ class PgSql:
             if len(location.get_file_list()) > 1:
                 # removes 0 record tables
                 self.sql_remove_empty_tables(data_schema, remove_empty_tables)
-                # print total Timer
-                total_timer.print_time(
-                    "Total conversion of fox pro data completed in: "
-                )
+                # print total timer
+                total_timer.print_time("Total conversion of fox pro data completed in: ")
         except Exception as error:
             raise error
 
@@ -1135,9 +982,6 @@ class PgSql:
     ):
         """Processing mysql data"""
         try:
-            # third party library import
-            import pymysql
-
             # total timing
             total_timer = Timer()
 
@@ -1148,8 +992,8 @@ class PgSql:
             # mysql schema
             self.create_schema(data_schema)
 
-            # open database - change
-            mysql_connection = pymsyql.connect(
+            # open database
+            mysql_connection = pymysql.connect(
                 host=self.__login_info["local_mysql"]["host"],
                 database=my_database,
                 user=self.__login_info["local_mysql"]["user"],
@@ -1157,24 +1001,25 @@ class PgSql:
             )
             mysql_cursor = mysql_connection.cursor()
 
-            # get all tables from mssql - change sql statement
-            tables_sql_statement = """
-				SELECT schema_name(tables.schema_id) as schema_name,
-					lower(tables.[name]) as table_name,
-					sum(partitions.rows) as row_count
-				from sys.tables
-					left outer join sys.partitions on tables.object_id = partitions.object_id
-				group by tables.schema_id, lower(tables.[name])
-				--HAVING sum(partitions.rows) != 0
-				order by tables.schema_id, lower(tables.[name]);"""
+            # get all tables from mssql
+            tables_sql_statement = f"""
+                select
+                    lower(table_schema) as table_schema,
+                    lower(table_name) as table_name,
+                    table_rows
+                from
+                    information_schema.tables
+                where
+                    table_schema = '{my_database}' /*and table_type = 'BASE TABLE'*/
+                order by
+                    lower(table_schema),
+                    lower(table_name);"""
             mysql_cursor.execute(tables_sql_statement)
 
-            # add to my_tables from mysql - change
+            # add to my_tables from mysql
             my_tables = ArrayList()
-            for table in mysql_cursor:
-                my_tables.append(
-                    table[1] if table[0] == "dbo" else f"{table[0]}.{table[1]}"
-                )
+            for my_table in mysql_cursor:
+                my_tables.append(f"{my_table[0]}.{my_table[1]}")
 
             # removes any tables from tables list
             for table_name in ignore_tables:
@@ -1182,8 +1027,8 @@ class PgSql:
 
             # when table variable is used
             if table != "":
-                my_tables.clear()
                 if my_tables.exists(table):
+                    my_tables.clear()
                     my_tables.append(table)
                 else:
                     print(f"Table doesn't exist in database: {table}")
@@ -1193,56 +1038,50 @@ class PgSql:
                 # table timing
                 table_timer = Timer()
 
-                # get schema_name & table_name - change
+                # get schema_name & table_name
                 if table_name.count(".") != 0:
                     schema_name = table_name.split(".")[0]
                     table_name = table_name.split(".")[1]
-                else:
-                    schema_name = "dbo"
 
                 print(f"{table_name} completed in: ", end="", flush=True)
 
                 # queue drop table statements
                 sql_drop = self.__drop_table_statements(data_schema, table_name)
 
-                # get table schema - change
+                # get table schema
                 mysql_cursor.execute(
                     f"""
-					select --lower(tables.[name]) as table_name,
-						columns.column_id,
-						lower(columns.[name]) as column_name,
-						case
-							when lower(types.[name]) in ('binary', 'image', 'rowversion', 'timestamp', 'varbinary') then 'bytea'
-							when lower(types.[name]) = 'bit' then 'boolean'
-							when lower(types.[name]) = 'datetime' then 'timestamp(3) without time zone'
-							when lower(types.[name]) = 'datetime2' then 'timestamp without time zone'
-							when lower(types.[name]) = 'datetimeoffset' then 'timestamp'
-							when lower(types.[name]) = 'decimal' then 'decimal(' + cast(columns.precision as varchar) + ',' + cast(columns.scale as varchar) + ')'
-							when lower(types.[name]) = 'float' then 'float8'
-							when lower(types.[name]) in ('nchar', 'char') then 'varchar' + case when columns.max_length is not null then '(' + cast(columns.max_length as varchar) + ')' else '' end
-							when lower(types.[name]) in ('ntext', 'text') or lower(types.[name]) in ('nvarchar', 'varchar') and columns.max_length = -1 then 'text'
-							when lower(types.[name]) in ('nvarchar', 'varchar') then 'varchar' + case when columns.max_length is not null then '(' + cast(columns.max_length as varchar) + ')' else '' end
-							when lower(types.[name]) = 'smalldatetime' then 'timestamp(0) without time zone'
-							when lower(types.[name]) = 'smallmoney' then 'money'
-							when lower(types.[name]) = 'time' then 'time without time zone'
-							when lower(types.[name]) = 'tinyint' then 'smallint'
-							when lower(types.[name]) = 'uniqueidentifier' then 'varchar(16)'	--'uuid'
-							when lower(types.[name]) in ('cursor', 'hiearchyid', 'sql_variant', 'table') then ''
-							else lower(types.[name]) end as data_type,
-						case when columns.is_nullable = 1 then 'True' else 'False' end as is_nullable
-					from sys.tables
-						inner join sys.columns on tables.object_id = columns.object_id
-						inner join sys.types on columns.system_type_id = types.system_type_id and lower(types.[name]) != 'sysname'
-					where tables.[name] = '{table_name}'
-					order by tables.[name], columns.column_id;"""
+                        SELECT
+                            ordinal_position,
+                        lower(column_name) as column_name,
+                            case
+                                when data_type = 'bool' then 'boolean'
+                                when data_type = 'tinyint' then 'smallint'
+                                when data_type = 'mediumint' then 'int'
+                                when data_type = 'float' then 'real'
+                                when data_type = 'double' then 'double precision'
+                                when data_type = 'time' then 'interval hour to second'
+                                when data_type = 'datetime' then 'timestamp without time zone'
+                                when data_type = 'timestamp' then 'timestamp with time zone'
+                                when data_type = 'tinytext' then 'varchar(255)'
+                                when left(data_type, 6) = 'binary' or left(data_type, 9) = 'varbinary' then 'bytea'
+                                else data_type end as data_type,
+                            case when is_nullable = 'YES' then 'True' else 'False' end as is_nullable
+                        from
+                            information_schema.columns
+                        where
+                            table_schema = '{schema_name}' and table_name = '{table_name}'
+                        order by
+                            lower(table_name), ordinal_position;"""
                 )
 
                 # create table string - data schema
                 sql_create = f"create table if not exists {data_schema}.{table_name}("
 
-                # columns (column_id, column_name, data_type, is_nullable) - change
+                # columns (ordinal_position, column_name, data_type, is_nullable)
                 for column in mysql_cursor:
-                    sql_create += f'{self.__modify_column_name(column[1])} {column[2]}{"" if column[3] == "True" else " NOT NULL"}, '
+                    sql_create += f"""{self.__modify_column_name(column[1])}
+                                        {column[2]}{"" if column[3] == "True" else " NOT NULL"}, """
                 # remove last comma and space and replace with );
                 sql_create = sql_create.rstrip(", ") + ");"
                 # queue create table statements
@@ -1270,21 +1109,19 @@ class PgSql:
                             sql_row += f"{self.__transform_byte_data(column)}, "
                         # strings & dates
                         else:
-                            sql_row += (
-                                f"E'{self.__transform_string_data(str(column))}', "
-                            )
+                            sql_row += f"E'{self.__transform_string_data(str(column))}', "
                     # remove last comma and space
                     sql_row = sql_row.rstrip(", ")
                     # queue insert into statements
                     self.__insert_into_statements(data_schema, table_name, sql_row)
 
                 # execute anything left in the queue
-                self.sql_queue_exec(exec=True)
+                self.sql_queue_exec(execute=True)
 
                 # close table
                 mysql_cursor.close()
 
-                # print table Timer
+                # print table timer
                 table_timer.print_time()
 
             # vacuums
@@ -1294,11 +1131,11 @@ class PgSql:
                 self.sql_remove_empty_tables(data_schema, remove_empty_tables)
 
             # close cursor & connection
-            # mysql_cursor.close()
+            mysql_cursor.close()
             mysql_connection.close()
 
             if len(my_tables) > 1:
-                # print total Timer
+                # print total timer
                 total_timer.print_time("Total conversion of mysql data completed in: ")
         except Exception as error:
             raise error
@@ -1306,7 +1143,7 @@ class PgSql:
     def etl_spreadsheet_data(
         self,
         path: str,
-        file: str = "",
+        file_name: str = "",
         data_schema: str = "excel",
         file_table_name: bool = False,
         sheet_table_name: bool = True,
@@ -1318,10 +1155,6 @@ class PgSql:
     ):
         """Processing spreadsheet data"""
         try:
-            # third party library import
-            import csv
-            import pyexcel
-
             # total timing
             total_timer = Timer()
 
@@ -1333,20 +1166,20 @@ class PgSql:
             self.create_schema(data_schema)
 
             # set location
-            location = DataLocation(path, file, ["csv", "tsv", "xlsx", "xlsm", "xls"])
+            location = DataLocation(path, file_name, ["csv", "tsv", "xlsx", "xlsm", "xls"])
 
             # removes any files from location list
-            for file_name in ignore_files:
-                location.get_file_list().remove(file_name.lower())
+            for file_name_list in ignore_files:
+                location.get_file_list().remove(file_name_list.lower())
 
             # loop thru file list
-            for file in location.get_file_list():
+            for file_name_list in location.get_file_list():
                 # table timing
                 table_timer = Timer()
 
                 # open file
                 spreadsheet_cursor = pyexcel.get_book(
-                    file_name=os.path.join(path, file),
+                    file_name=os.path.join(path, file_name_list),
                     encoding=self.__encoding,
                     delimiter=delimiter_char,
                 )
@@ -1361,9 +1194,7 @@ class PgSql:
 
                 # loop thru file (ie workbook)
                 for work_sheet in work_sheets:
-                    number_of_columns = spreadsheet_cursor[
-                        work_sheet
-                    ].number_of_columns()
+                    number_of_columns = spreadsheet_cursor[work_sheet].number_of_columns()
                     number_of_rows = spreadsheet_cursor[work_sheet].number_of_rows()
 
                     # get table_name from file and/or sheet
@@ -1372,8 +1203,7 @@ class PgSql:
                         table_name = re.sub(
                             "\\W",
                             "_",
-                            os.path.splitext(file)[0].lower()
-                            + f"{'_' if sheet_table_name else ''}",
+                            os.path.splitext(file_name_list)[0].lower() + f"{'_' if sheet_table_name else ''}",
                         )
                     # set table_name from sheet_name regardless
                     table_name += re.sub("\\W", "_", work_sheet.lower())
@@ -1389,20 +1219,14 @@ class PgSql:
                             new_column_name = re.sub(
                                 "\\W",
                                 "_",
-                                str(
-                                    spreadsheet_cursor[work_sheet].cell_value(
-                                        header_line - 1, column_index
-                                    )
-                                ).strip(),
+                                str(spreadsheet_cursor[work_sheet].cell_value(header_line - 1, column_index)).strip(),
                             )
                             # uses column_# if empty column name
                             if new_column_name == "":
                                 column_names.append("column_" + str(column_index + 1))
                             # uses column name plus _# if column name is already used once
                             elif column_names.exists(new_column_name):
-                                column_names.append(
-                                    new_column_name + "_" + str(column_index + 1)
-                                )
+                                column_names.append(new_column_name + "_" + str(column_index + 1))
                             # uses column name in spreadsheet
                             else:
                                 column_names.append(new_column_name)
@@ -1412,14 +1236,10 @@ class PgSql:
                     column_sizes = ArrayList([0] * number_of_columns)
 
                     # column types & sizes checking
-                    for row_index in range(
-                        header_line, number_of_rows - bottom_lines_skipped
-                    ):
+                    for row_index in range(header_line, number_of_rows - bottom_lines_skipped):
                         # column specifications
                         for column_index in range(number_of_columns):
-                            testing_value = spreadsheet_cursor[work_sheet].cell_value(
-                                row_index, column_index
-                            )
+                            testing_value = spreadsheet_cursor[work_sheet].cell_value(row_index, column_index)
 
                             # boolean
                             if (
@@ -1429,10 +1249,7 @@ class PgSql:
                             ):
                                 column_types[column_index] = "boolean"
                             # date
-                            elif (
-                                isinstance(testing_value, datetime.date)
-                                and column_types[column_index] != "boolean"
-                            ):
+                            elif isinstance(testing_value, datetime.date) and column_types[column_index] != "boolean":
                                 column_types[column_index] = "date"
                             # string
                             elif (
@@ -1458,10 +1275,7 @@ class PgSql:
                                 and column_types[column_index] != "varchar"
                                 and column_types[column_index] != "numeric"
                             ):
-                                if (
-                                    abs(int(testing_value)) <= 2147483647
-                                    and column_types[column_index] != "bigint"
-                                ):
+                                if abs(int(testing_value)) <= 2147483647 and column_types[column_index] != "bigint":
                                     column_types[column_index] = "integer"
                                 else:
                                     column_types[column_index] = "bigint"
@@ -1474,9 +1288,7 @@ class PgSql:
                     sql_drop = self.__drop_table_statements(data_schema, table_name)
 
                     # create table string - data schema
-                    sql_create = (
-                        f"create table if not exists {data_schema}.{table_name}("
-                    )
+                    sql_create = f"create table if not exists {data_schema}.{table_name}("
 
                     # column statements for table creation
                     for column_index in range(number_of_columns):
@@ -1486,14 +1298,9 @@ class PgSql:
                         # column types & size
                         # string
                         if column_types[column_index] == "varchar":
-                            sql_create += (
-                                f"varchar({column_sizes[column_index]}) default ''"
-                            )
+                            sql_create += f"varchar({column_sizes[column_index]}) default ''"
                         # integer or bigint
-                        elif (
-                            column_types[column_index] == "integer"
-                            or column_types[column_index] == "bigint"
-                        ):
+                        elif column_types[column_index] == "integer" or column_types[column_index] == "bigint":
                             sql_create += f"{column_types[column_index]} default 0"
                         # numeric
                         elif column_types[column_index] == "numeric":
@@ -1515,21 +1322,15 @@ class PgSql:
                     self.__create_table_statements(data_schema, table_name, sql_create)
 
                     # write drop & create statments after sql_[data_type].table is setup
-                    self.__sql_table_setup(
-                        data_schema, table_name, sql_drop, sql_create
-                    )
+                    self.__sql_table_setup(data_schema, table_name, sql_drop, sql_create)
 
                     # process data rows
-                    for row_index in range(
-                        header_line, number_of_rows - bottom_lines_skipped
-                    ):
+                    for row_index in range(header_line, number_of_rows - bottom_lines_skipped):
                         sql_row = ""
 
                         # column from each row
                         for column_index in range(number_of_columns):
-                            cell_value = spreadsheet_cursor[work_sheet].cell_value(
-                                row_index, column_index
-                            )
+                            cell_value = spreadsheet_cursor[work_sheet].cell_value(row_index, column_index)
 
                             # boolean
                             if column_types[column_index] == "boolean":
@@ -1562,15 +1363,16 @@ class PgSql:
                         self.__insert_into_statements(data_schema, table_name, sql_row)
 
                     # execute anything left in the queue
-                    self.sql_queue_exec(exec=True)
+                    self.sql_queue_exec(execute=True)
+
+                    # print table timer
+                    table_timer.print_time()
 
             # vacuums
             self.sql_vacuum()
 
-            # print total Timer
-            total_timer.print_time(
-                "Total conversion of spreadsheet data completed in: "
-            )
+            # print total timer
+            total_timer.print_time("Total conversion of spreadsheet data completed in: ")
         except Exception as error:
             raise error
 
@@ -1584,9 +1386,6 @@ class PgSql:
     ):
         """Processing sql server data"""
         try:
-            # third party library import
-            import pymssql
-
             # constants
             # default_encoding = "utf-16"
 
@@ -1614,14 +1413,19 @@ class PgSql:
 
             # get all tables from mssql
             tables_sql_statement = """
-				SELECT schema_name(tables.schema_id) as schema_name,
-					lower(tables.[name]) as table_name,
-					sum(partitions.rows) as row_count
-				FROM sys.tables
-					left outer join sys.partitions on tables.object_id = partitions.object_id
-				GROUP by tables.schema_id, lower(tables.[name])
-				--HAVING sum(partitions.rows) != 0
-				ORDER by tables.schema_id, lower(tables.[name]);"""
+                select
+                    schema_name(tables.schema_id) as schema_name,
+                    lower(tables.[name]) as table_name,
+                    sum(partitions.rows) as row_count
+                from
+                    sys.tables
+                        left outer join sys.partitions on tables.object_id = partitions.object_id
+                group by
+                    tables.schema_id, lower(tables.[name])
+                --having
+                    --sum(partitions.rows) != 0
+                order by
+                    tables.schema_id, lower(tables.[name]);"""
             mssql_cursor.execute(tables_sql_statement)
 
             # add to ms_tables from mssql
@@ -1664,33 +1468,37 @@ class PgSql:
                 # get table schema
                 mssql_cursor.execute(
                     f"""
-					select --lower(tables.[name]) as table_name,
-						columns.column_id,
-						lower(columns.[name]) as column_name,
-						case
-							when lower(types.[name]) in ('binary', 'image', 'rowversion', 'timestamp', 'varbinary') then 'bytea'
-							when lower(types.[name]) = 'bit' then 'boolean'
-							when lower(types.[name]) = 'datetime' then 'timestamp(3) without time zone'
-							when lower(types.[name]) = 'datetime2' then 'timestamp without time zone'
-							when lower(types.[name]) = 'datetimeoffset' then 'timestamp'
-							when lower(types.[name]) = 'decimal' then 'decimal(' + cast(columns.precision as varchar) + ',' + cast(columns.scale as varchar) + ')'
-							when lower(types.[name]) = 'float' then 'float8'
-							when lower(types.[name]) in ('nchar', 'char') then 'varchar' + case when columns.max_length is not null then '(' + cast(columns.max_length as varchar) + ')' else '' end
-							when lower(types.[name]) in ('ntext', 'text') or lower(types.[name]) in ('nvarchar', 'varchar') and columns.max_length = -1 then 'text'
-							when lower(types.[name]) in ('nvarchar', 'varchar') then 'varchar' + case when columns.max_length is not null then '(' + cast(columns.max_length as varchar) + ')' else '' end
-							when lower(types.[name]) = 'smalldatetime' then 'timestamp(0) without time zone'
-							when lower(types.[name]) = 'smallmoney' then 'money'
-							when lower(types.[name]) = 'time' then 'time without time zone'
-							when lower(types.[name]) = 'tinyint' then 'smallint'
-							when lower(types.[name]) = 'uniqueidentifier' then 'uuid'
-							when lower(types.[name]) in ('cursor', 'hiearchyid', 'sql_variant', 'table') then ''
-							else lower(types.[name]) end as data_type,
-						case when columns.is_nullable = 1 then 'True' else 'False' end as is_nullable
-					from sys.tables
-						inner join sys.columns on tables.object_id = columns.object_id
-						inner join sys.types on columns.system_type_id = types.system_type_id and lower(types.[name]) != 'sysname'
-					where tables.[name] = '{table_name}'
-					order by tables.[name], columns.column_id;"""
+                        select
+                            --lower(tables.[name]) as table_name,
+                            columns.column_id,
+                            lower(columns.[name]) as column_name,
+                            case
+                                when lower(types.[name]) in ('binary', 'image', 'rowversion', 'timestamp', 'varbinary') then 'bytea'
+                                when lower(types.[name]) = 'bit' then 'boolean'
+                                when lower(types.[name]) = 'datetime' then 'timestamp(3) without time zone'
+                                when lower(types.[name]) = 'datetime2' then 'timestamp without time zone'
+                                when lower(types.[name]) = 'datetimeoffset' then 'timestamp'
+                                when lower(types.[name]) = 'decimal' then 'decimal(' + cast(columns.precision as varchar) + ',' + cast(columns.scale as varchar) + ')'
+                                when lower(types.[name]) = 'float' then 'float8'
+                                when lower(types.[name]) in ('nchar', 'char') then 'varchar' + case when columns.max_length is not null then '(' + cast(columns.max_length as varchar) + ')' else '' end
+                                when lower(types.[name]) in ('ntext', 'text') or lower(types.[name]) in ('nvarchar', 'varchar') and columns.max_length = -1 then 'text'
+                                when lower(types.[name]) in ('nvarchar', 'varchar') then 'varchar' + case when columns.max_length is not null then '(' + cast(columns.max_length as varchar) + ')' else '' end
+                                when lower(types.[name]) = 'smalldatetime' then 'timestamp(0) without time zone'
+                                when lower(types.[name]) = 'smallmoney' then 'money'
+                                when lower(types.[name]) = 'time' then 'time without time zone'
+                                when lower(types.[name]) = 'tinyint' then 'smallint'
+                                when lower(types.[name]) = 'uniqueidentifier' then 'uuid'
+                                when lower(types.[name]) in ('cursor', 'hiearchyid', 'sql_variant', 'table') then ''
+                                else lower(types.[name]) end as data_type,
+                            case when columns.is_nullable = 1 then 'True' else 'False' end as is_nullable
+                        from
+                            sys.tables
+                                inner join sys.columns on tables.object_id = columns.object_id
+                                inner join sys.types on columns.system_type_id = types.system_type_id and lower(types.[name]) != 'sysname'
+                        where
+                            tables.[name] = '{table_name}'
+                        order by
+                            tables.[name], columns.column_id;"""
                 )
 
                 # create table string - data schema
@@ -1723,25 +1531,23 @@ class PgSql:
                         if column is None:
                             sql_row += "null, "
                         # numbers & boolean
-                        elif isinstance(column, (bool, int, float, decimal.Decimal)):  #
+                        elif isinstance(column, (bool, int, float, decimal.Decimal)):
                             sql_row += f"{column}, "
                         # bytes
                         elif isinstance(column, bytes):
                             sql_row += f"{self.__transform_byte_data(column)}, "
                         # strings & dates
                         else:
-                            sql_row += (
-                                f"E'{self.__transform_string_data(str(column))}', "
-                            )
+                            sql_row += f"E'{self.__transform_string_data(str(column))}', "
                     # remove last comma and space
                     sql_row = sql_row.rstrip(", ")
                     # queue insert into statements
                     self.__insert_into_statements(data_schema, table_name, sql_row)
 
                 # execute anything left in the queue
-                self.sql_queue_exec(exec=True)
+                self.sql_queue_exec(execute=True)
 
-                # print table Timer
+                # print table timer
                 table_timer.print_time()
 
             # vacuums
@@ -1755,29 +1561,25 @@ class PgSql:
             mssql_connection.close()
 
             if len(ms_tables) > 1:
-                # print total Timer
-                total_timer.print_time(
-                    "Total conversion of sql server data completed in: "
-                )
+                # print total timer
+                total_timer.print_time("Total conversion of sql server data completed in: ")
         except Exception as error:
             raise error
 
-    def read_sql_file(
-        self, path: str, file: str = "", ignore_tables: ArrayList = ArrayList()
-    ):
+    def read_sql_file(self, path: str, file_name: str = "", ignore_tables: ArrayList = ArrayList()):
         """Read sql file data"""
         try:
             # total timing
             total_timer = Timer()
 
             # set location
-            location = DataLocation(path, file, ["sql"])
+            location = DataLocation(path, file_name, ["sql"])
 
             # removes any tables from location list
             for table_name in ignore_tables:
                 location.get_file_list().remove(table_name.lower())
 
-            read_sql_files_normal_operation = file.startswith("default_") == False
+            read_sql_files_normal_operation = file_name.startswith("default_") is False
 
             if read_sql_files_normal_operation:
                 if len(location.get_file_list()) == 1:
@@ -1786,15 +1588,13 @@ class PgSql:
                     print("Reading sql files...")
 
             # loop thru file list
-            for file in location.get_file_list():
-                # table Timer
+            for file_name_list in location.get_file_list():
+                # table timer
                 table_timer = Timer()
-                print(f"  {file.split('.')[0]} completed in: ", end="", flush=True)
+                print(f"  {file_name_list.split('.')[0]} completed in: ", end="", flush=True)
 
                 # open current sql file
-                with open(
-                    os.path.join(path, file), "r", encoding=self.__encoding
-                ) as sql_file:
+                with open(os.path.join(path, file_name_list), "r", encoding=self.__encoding) as sql_file:
                     build_sql_statement = ""
 
                     # reads file line by line
@@ -1808,12 +1608,12 @@ class PgSql:
                             build_sql_statement = ""
 
                     # execute anything left in the queue
-                    self.sql_queue_exec(exec=True)
+                    self.sql_queue_exec(execute=True)
 
-                    # print table Timer
+                    # print table timer
                     table_timer.print_time()
 
-            # print total Timer
+            # print total timer
             if read_sql_files_normal_operation and len(location.get_file_list()) > 1:
                 total_timer.print_time("SQL files completed in: ")
         except Exception as error:
@@ -1832,9 +1632,7 @@ class PgSql:
         except Exception as error:
             raise error
 
-    def sql_count(
-        self, sql_statement: str = "", print: bool = False, print_str: str = ""
-    ) -> int:
+    def sql_count(self, sql_statement: str = "", printing: bool = False, print_str: str = "") -> int:
         """Return or print to screen the count in sql query"""
         try:
             # execute query
@@ -1842,14 +1640,13 @@ class PgSql:
                 self.__pg_cursor.execute(str(sql_statement))
 
             # print to screen the count
-            if print and self.__pg_cursor.rowcount > 0:
+            if printing and self.__pg_cursor.rowcount > 0:
                 if self.__pg_cursor.rowcount == 1:
                     print(f"\t{self.__pg_cursor.rowcount} row: {print_str}")
                 else:
                     print(f"\t{self.__pg_cursor.rowcount} rows: {print_str}")
-            # return count
-            elif not print:
-                return self.__pg_cursor.rowcount
+            # elif not printing:
+            return self.__pg_cursor.rowcount
         except Exception as error:
             raise error
 
@@ -1865,9 +1662,7 @@ class PgSql:
         except Exception as error:
             raise error
 
-    def sql_refresh_data(
-        self, schema: str = "", table: str = "", ignore_tables: ArrayList = ArrayList()
-    ):
+    def sql_refresh_data(self, schema: str = "", table: str = "", ignore_tables: ArrayList = ArrayList()):
         """Refreshes complete schema or single table from sql_[data_type].table"""
         try:
             # total timing
@@ -1916,15 +1711,15 @@ class PgSql:
                     record_count += 1
 
                 # execute last queued statements
-                self.sql_queue_exec(exec=True)
+                self.sql_queue_exec(execute=True)
 
-                # print table Timer
+                # print table timer
                 table_timer.print_time()
 
             # vacuums
             self.sql_vacuum()
 
-            # print total Timer
+            # print total timer
             refresh_timer.print_time("Data refreshed in: ")
         except Exception as error:
             raise error
@@ -1951,7 +1746,7 @@ class PgSql:
                         self.sql_queue_exec(remove_table[0])
 
                     # execute queue
-                    self.sql_queue_exec(exec=True)
+                    self.sql_queue_exec(execute=True)
 
                     remove_timer.print_time("Removed empty tables in: ")
         except Exception as error:
@@ -1964,8 +1759,8 @@ class PgSql:
         except Exception as error:
             raise error
 
-    def sql_queue_exec(self, sql_statement: str = "", exec: bool = False):
-        """Executes when exec is set or when queued sql statements reaches max semicolon or max string length"""
+    def sql_queue_exec(self, sql_statement: str = "", execute: bool = False):
+        """Executes when execute is set or when queued sql statements reaches max semicolon or max string length"""
         try:
             if sql_statement != "":
                 # add semicolon to end of sql_statements
@@ -1976,7 +1771,7 @@ class PgSql:
                 self.__execute_sql_when_maximum(sql_statement)
 
             # execute all sql_statements
-            if exec:
+            if execute:
                 # execute the remainder of sql strings - less than semicolon_maximum
                 if self.__sql_statements.count(";") > 0:
                     self.__insert_log()
@@ -1985,9 +1780,7 @@ class PgSql:
         except Exception as error:
             raise error
 
-    def sql_vacuum(
-        self, full: bool = False, analyze: bool = True, printing: bool = True
-    ):
+    def sql_vacuum(self, full: bool = False, analyze: bool = True, printing: bool = True):
         """Vacuums with full, analyze"""
         try:
             if printing:
