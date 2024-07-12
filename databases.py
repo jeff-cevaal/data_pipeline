@@ -16,27 +16,28 @@ from utilities import Timer
 class PgSql:
     """ PostgreSQL database access """
 
-    def __init__(self, database: str, cloud: bool = False, sql_queue_count: int = 500):
+    #def __init__(self, database: str, cloud: bool = False, sql_queue_count: int = 500):
+    def __init__(self, database: str, connection: str = 'local_pg_5433', sql_queue_count: int = 500):
         # sql_queue_count to small ~< 100 and to big ~> 800 it becomes slower
 
-        self.__toml_settings_file = os.path.join(os.path.dirname(__file__), 'settings', 'login.toml')
+        self.__toml_settings_file = os.path.join(os.path.dirname(__file__), 'info', 'logins.toml')
         # read login file
         with open(self.__toml_settings_file, 'rb') as toml_file:
             self._login_info = tomllib.load(toml_file)
 
         # get login credentials
-        self.__pg_server = self._login_info['cloud_pg' if cloud else 'local_pg']['host']
-        self.__pg_port = self._login_info['cloud_pg' if cloud else 'local_pg']['port']
-        self.__pg_username = self._login_info['cloud_pg' if cloud else 'local_pg']['user']
-        self.__pg_password = self._login_info['cloud_pg' if cloud else 'local_pg']['password']
-        self.__ssl = self._login_info['cloud_pg' if cloud else 'local_pg']['ssl']
+        #self.__pg_server = self._login_info['cloud_pg' if cloud else 'local_pg']['host']
+        #self.__pg_port = self._login_info['cloud_pg' if cloud else 'local_pg']['port']
+        #self.__pg_username = self._login_info['cloud_pg' if cloud else 'local_pg']['user']
+        #self.__pg_password = self._login_info['cloud_pg' if cloud else 'local_pg']['password']
+        #self.__ssl = self._login_info['cloud_pg' if cloud else 'local_pg']['ssl']
 
         # constants
         # protected
         self._sql_schema = 'sql_'
         self._sys_schema = 'sys'
         # private
-        self.__pg_default_db = 'postgres'
+        #self.__pg_default_db = 'postgres'
         self.__sql_string_maximum = 100000000  # larger than 230,000,000 creates a string failure
         self.__sql_variables = {}
 
@@ -45,48 +46,65 @@ class PgSql:
 
         # variables
         self.__pg_database = database
+        self.__login_credentials = self._login_info.get(connection)
         self.__sql_statements = ''
         self.__semicolon_count = 0
         self.__log_queue = ArrayList()
         self.__log_written = ArrayList()
 
-        # check if database exists
-        self.__pg_sql_connection = psycopg2.connect(
-            host=self.__pg_server,
-            port=self.__pg_port,
-            user=self.__pg_username,
-            password=self.__pg_password,
-            database=self.__pg_default_db,
-            sslmode=self.__ssl,
-        )
-        self.__pg_sql_connection.autocommit = True
+        if self.__login_credentials is not None:
 
-        # check if database exists or not
-        self.__pg_sql_cursor = self.__pg_sql_connection.cursor()
-        self.__pg_sql_cursor.execute(f"select datname from pg_catalog.pg_database where datname = '{database}';")
-        # create database if empty rowcount
-        if self.__pg_sql_cursor.rowcount == 0:
-            self.__pg_sql_cursor.execute(f'create database "{database}";')
+            # initalize connection to postgres database
+            self.__init_pg_connection('postgres', self.__login_credentials, main_connection=False)
 
-        # get reserved keywords - constant
-        self.__pg_sql_cursor.execute("select word from pg_get_keywords() where catcode in ('R', 'T');")
-        for keyword in self.__pg_sql_cursor.fetchall():
-            self._reserved_keywords.append(keyword[0])
+            """
+            # check if database exists
+            self.__pg_sql_connection = psycopg2.connect(
+                host=self.__pg_server,
+                port=self.__pg_port,
+                user=self.__pg_username,
+                password=self.__pg_password,
+                database=self.__pg_default_db,
+                sslmode=self.__ssl,
+            )
+            self.__pg_sql_connection.autocommit = True
 
-        # connect to database
-        self.__pg_connection = psycopg2.connect(
-            host=self.__pg_server,
-            port=self.__pg_port,
-            user=self.__pg_username,
-            password=self.__pg_password,
-            database=self.__pg_database,
-            sslmode=self.__ssl,
-        )
-        self.__pg_connection.autocommit = True
-        self.__pg_cursor = self.__pg_connection.cursor()
+            self.__pg_sql_cursor = self.__pg_sql_connection.cursor()
+            """
 
-        # create sys.log if not exists
-        self.__create_log()
+            # check if database exists or not
+            self.__pg_sql_cursor.execute(f"select datname from pg_catalog.pg_database where datname = '{database}';")
+            # create database if empty rowcount
+            if self.__pg_sql_cursor.rowcount == 0:
+                self.__pg_sql_cursor.execute(f'create database "{database}";')
+
+            # get reserved keywords - constant
+            self.__pg_sql_cursor.execute("select word from pg_get_keywords() where catcode in ('R', 'T');")
+            for keyword in self.__pg_sql_cursor.fetchall():
+                self._reserved_keywords.append(keyword[0])
+
+            # initalize connection to specified database
+            self.__init_pg_connection(self.__pg_database, self.__login_credentials)
+
+            """
+            # connect to database
+            self.__pg_connection = psycopg2.connect(
+                host=self.__pg_server,
+                port=self.__pg_port,
+                user=self.__pg_username,
+                password=self.__pg_password,
+                database=self.__pg_database,
+                sslmode=self.__ssl,
+            )
+            self.__pg_connection.autocommit = True
+            self.__pg_cursor = self.__pg_connection.cursor()
+            """
+
+            # create sys.log if not exists
+            self.__create_log()
+
+        else:
+            print(f'{connection}: not in {self.__toml_settings_file} file')
 
     # Public
     def close(self):
@@ -103,6 +121,7 @@ class PgSql:
     def copy(self, dest_database: str, dest_schema: str = 'wt', dest_cloud: bool = False):
         """ Copy from source table to destination table """
 
+        """
         # get login credentials
         pg_server = self._login_info['cloud_pg' if dest_cloud else 'local_pg']['host']
         pg_port = self._login_info['cloud_pg' if dest_cloud else 'local_pg']['port']
@@ -119,6 +138,9 @@ class PgSql:
             database=self.__pg_default_db,
             sslmode=ssl,
         )
+        """
+
+        self.__init_pg_connection('postgres', credentials, False)
 
         # create table for destination
 
@@ -217,7 +239,8 @@ class PgSql:
         tables = ArrayList([table])
 
         # initialize connect to current database for sql_[data_type].table data
-        self.__init_pg_sql_connection(self.__pg_database)
+        #self.__init_pg_sql_connection(self.__pg_database)
+        self.__init_pg_connection(self.__pg_database, self.__login_credentials)
 
         # complete schema refresh
         if table == '':
@@ -243,9 +266,8 @@ class PgSql:
             print(f'  {table_name} completed in: ', end='', flush=True)
 
             # get data from sql_[data_type].table
-            self.__pg_sql_cursor.execute(
-                f'select data from {self._sql_schema + schema}.{table_name} order by sorting, id;'
-            )
+            sql_statement = f'select data from {self._sql_schema + schema}.{table_name} order by sorting, id;'
+            self.__pg_sql_cursor.execute(sql_statement)                
 
             record_count = 1
             while record_count <= self.__pg_sql_cursor.rowcount:
@@ -438,6 +460,43 @@ class PgSql:
 
             # connection -> cursor
             self.__pg_sql_cursor = self.__pg_sql_connection.cursor()
+
+    def __init_pg_connection(self, database: str, credentials: str, main_connection : bool = True):
+        """ Initialize pg connection for data usage """
+
+        if main_connection:
+            # if already connected to the database
+            if str(self.__pg_cursor.connection).count(database) == 0:
+                # new connection for getting sql.table data
+                self.__pg_connection = psycopg2.connect(
+                    host=credentials['host'],
+                    port=credentials['port'],
+                    user=credentials['username'],
+                    password=credentials['password'],
+                    database=database,
+                    sslmode=credentials['ssl']
+                )
+                self.__pg_connection.autocommit = True
+
+                # connection -> cursor
+                self.__pg_cursor = self.__pg_connection.cursor()
+
+        else:
+            # if already connected to the database
+            if str(self.__pg_sql_cursor.connection).count(database) == 0:
+                # new connection for getting sql.table data
+                self.__pg_sql_connection = psycopg2.connect(
+                    host=credentials['host'],
+                    port=credentials['port'],
+                    user=credentials['username'],
+                    password=credentials['password'],
+                    database=database,
+                    sslmode=credentials['ssl']
+                )
+                self.__pg_sql_connection.autocommit = True
+
+                # connection -> cursor
+                self.__pg_sql_cursor = self.__pg_sql_connection.cursor()
 
     def __insert_log(self):
         """ Inserts db_schema, db_table, description & current date/time in the log table """

@@ -4,7 +4,6 @@
 import decimal
 import os
 import re
-#import logging
 from binascii import hexlify
 from datetime import date
 
@@ -25,23 +24,14 @@ from utilities import Timer
 class DataPipeline(PgSql):
     """ Extends PostgreSQL database for ETL Data """
 
-    def __init__( self, database: str, cloud: bool = False, sql_queue_count: int = 500):
+    def __init__( self, database: str, connection: str, sql_queue_count: int = 500):
         # sql_queue_count to small ~< 100 and to big ~> 800 it becomes slower
 
-        super().__init__(database, cloud, sql_queue_count)
+        super().__init__(database, connection, sql_queue_count)
 
         # constants - private
         self.__encoding = 'utf-8'
-        self.__error_log = Logger('error.log', log_level='ERROR')
-
-        """
-        logging.basicConfig(
-            filename='error.log',
-            encoding='utf-8',
-            level=logging.INFO,
-            format='%(asctime)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )"""
+        self.__error_log = Logger(os.path.join('info', 'error.log'))
 
     # Public
     def etl_dataflex_data(
@@ -1082,8 +1072,7 @@ class DataPipeline(PgSql):
 
         except Exception as error:
             print(sql_insert)
-            #logging.info(sql_insert)
-            self.__error_log.get_log().error(sql_insert)
+            self.__error_log.error(sql_insert)
             raise error
 
     def __modify_column_name(self, column: str) -> str:
