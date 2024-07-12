@@ -121,10 +121,14 @@ class DataLocation:
 
 
 class Logger(logging.Logger):
-    """ Extends logging class """
+    """ Extends logging class to allow multiple files """
 
-    def __init__(self, file_name: str, message_format: str = '%(asctime)s - %(message)s', 
-                date_format: str = '%Y-%m-%d %H:%M:%S', log_level: enumerate = logging.INFO):
+    def __init__(
+        self,
+        file_name: str,
+        message_format: str = '%(asctime)s - %(message)s',
+        date_format: str = '%Y-%m-%d %H:%M:%S'
+    ):
 
         super().__init__(file_name, logging.DEBUG)
 
@@ -134,19 +138,41 @@ class Logger(logging.Logger):
         self.__handler.setFormatter(self.__formatter)
         
         self.__log_file = logging.getLogger(file_name)
-        self.__log_file.setLevel(log_level)
+        # setting to DEBUG allows all levels to be written to
+        self.__log_file.setLevel(logging.DEBUG)
         self.__log_file.addHandler(self.__handler)
 
-    def get_log(self):
-        """ Send log file instance """
+    def critical(self, message):
+        """ Logs message to critical function  """
 
-        return self.__log_file
+        self.__log_file.critical(message)
+    
+    def debug(self, message):
+        """ Logs message to debug function  """
+
+        self.__log_file.debug(message)
+
+    def error(self, message):
+        """ Logs message to error function  """
+
+        self.__log_file.error(message)
+
+    def info(self, message):
+        """ Logs message to info function  """
+
+        self.__log_file.info(message)
+
+    def warning(self, message):
+        """ Logs message to warning function  """
+
+        self.__log_file.warning(message)
 
 
 class Timer:
     """ Print the time between beginning and end of the timer """
 
     def __init__(self):
+
         self.__start_time = time.time()
 
     # Private
