@@ -3,6 +3,7 @@
 # standard library imports
 import os
 import time
+import tomllib
 import logging
 
 class ArrayList(list):
@@ -233,3 +234,33 @@ class Timer:
             print_string += ' '
 
         print(f'{print_string}{self.__calculate_time_string()}')
+
+class Toml:
+    """ Toml helper class """
+
+    def __init__(self, path: str, file_name: str):
+
+        if os.path.isdir(os.path.join(path)):
+            if os.path.isfile(os.path.join(path, file_name)):
+                with open(os.path.join(path, file_name), 'rb') as toml_file:
+                    self.__toml_file = tomllib.load(toml_file)
+            else:
+                print(f'Invalid file: {file_name}')
+        else:
+            print(f'Invalid path: {path}')
+
+    def get(self, variable_name: str = '') -> None:
+        """ Returns complete toml instance or a sub heading """
+
+        if variable_name == '':
+            return self.__toml_file
+        else:
+            return self.__toml_file.get(variable_name)
+
+    def type_check(self, variable_name: str, instance_type: type) -> bool:
+        """ Returns true if variable_name and instance_type are a match """
+
+        if isinstance(self.__toml_file.get(variable_name), instance_type):
+            return True
+    
+        return False
