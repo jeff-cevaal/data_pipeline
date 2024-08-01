@@ -1,9 +1,9 @@
 """ ETL Data Pipeline """
 
 # standard library imports
-import decimal
 import os
 import re
+import decimal
 from binascii import hexlify
 from datetime import date
 
@@ -31,7 +31,7 @@ class DataPipeline(PgSql):
 
         # constants - private
         self.__encoding = 'utf-8'
-        self.__error_log = Logger(os.path.join('info', 'error.log'))
+        self.__error_log = Logger(os.path.join(os.path.dirname(__file__), 'info', 'error.log'))
 
     # Public
     def etl_dataflex_data(
