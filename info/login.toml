@@ -1,0 +1,28 @@
+# local pg login
+[local_pg]
+host = "localhost"
+port = "5432"
+user = ""
+password = ""
+ssl = "disable"
+
+# cloud pg login
+[cloud_pg]
+host = ""
+port = "5432"
+user = ""
+password = ""
+ssl = "require"
+
+# local sql server login
+[local_mssql]
+host = "localhost"
+server = "SQLHOST"
+user = ""
+password = ""
+
+# local mysql login
+[local_mysql]
+host = ""
+user = ""
+password = ""
