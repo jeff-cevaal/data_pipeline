@@ -120,6 +120,44 @@ class PgSql:
 
         self.sql_queue_exec(self.__sql_data_transfer(schema), execute=True)
 
+    def create_functions(self):
+        """ Create functions from pg cloud """
+
+        functions_timer = Timer()
+
+        print('Creating sys functions in: ', end='', flush=True)
+
+        # initialize connect to cloud database
+        pg_cloud = PgSql('CoreInfo', 'cloud_pg', sql_queue_count=1)
+
+        # get all pgsql functions
+        pg_cloud.sql_queue_exec(f'select * from {self._sys_schema}.function')
+
+        # creates function definition from pgsql.function
+        for function in pg_cloud.sql_all_records():
+            if function[0] == 'sql':
+                function_str = f"""
+                    drop function if exists {self._sys_schema}.{function[1]};
+                        \ncreate function {self._sys_schema}.{function[1]}({function[2]}) returns {function[3]}
+                        \n\tlanguage {function[0]}
+                        \n\timmutable
+                        \n\t{function[5]}"""
+            elif function[0] == 'plpgsql':
+                function_str = f"""
+                    drop function if exists {self._sys_schema}.{function[1]};
+                        \ncreate function {self._sys_schema}.{function[1]}({function[2]})
+                        \n\treturns {function[3]} language {function[0]} as $$
+                        \ndeclare
+                        \n\t{function[4]}
+                        \nbegin
+                        \n\t{function[5]}
+                        \nend;
+                        \n$$;"""
+            # build function into sys schema
+            self.sql_queue_exec(function_str)
+
+        functions_timer.print_time()
+    
     def create_schema(self, schema: str):
         """ Creates the schema if it doesn't exist """
 
