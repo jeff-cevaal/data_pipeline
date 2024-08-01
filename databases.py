@@ -3,7 +3,6 @@
 # standard library imports
 import os
 import re
-import tomllib
 from datetime import datetime
 
 # third party library imports
@@ -12,32 +11,24 @@ import psycopg2
 # local library imports
 from utilities import ArrayList
 from utilities import Timer
+from utilities import Logger
+from utilities import Toml
 
 class PgSql:
     """ PostgreSQL database access """
 
     #def __init__(self, database: str, cloud: bool = False, sql_queue_count: int = 500):
-    def __init__(self, database: str, connection: str = 'local_pg_5433', sql_queue_count: int = 500):
+    def __init__(self, database: str, connection: str, sql_queue_count: int = 500):
         # sql_queue_count to small ~< 100 and to big ~> 800 it becomes slower
 
-        self.__toml_settings_file = os.path.join(os.path.dirname(__file__), 'info', 'logins.toml')
-        # read login file
-        with open(self.__toml_settings_file, 'rb') as toml_file:
-            self._login_info = tomllib.load(toml_file)
-
-        # get login credentials
-        #self.__pg_server = self._login_info['cloud_pg' if cloud else 'local_pg']['host']
-        #self.__pg_port = self._login_info['cloud_pg' if cloud else 'local_pg']['port']
-        #self.__pg_username = self._login_info['cloud_pg' if cloud else 'local_pg']['user']
-        #self.__pg_password = self._login_info['cloud_pg' if cloud else 'local_pg']['password']
-        #self.__ssl = self._login_info['cloud_pg' if cloud else 'local_pg']['ssl']
+        self.__login_info = Toml(os.path.join(os.path.dirname(__file__), 'info'), 'logins.toml')
+        self.__error_log = Logger(os.path.join(os.path.dirname(__file__), 'info', 'error.log'))
 
         # constants
         # protected
         self._sql_schema = 'sql_'
         self._sys_schema = 'sys'
         # private
-        #self.__pg_default_db = 'postgres'
         self.__sql_string_maximum = 100000000  # larger than 230,000,000 creates a string failure
         self.__sql_variables = {}
 
@@ -46,7 +37,7 @@ class PgSql:
 
         # variables
         self.__pg_database = database
-        self.__login_credentials = self._login_info.get(connection)
+        self.__login_credentials = self.__login_info.get(connection)
         self.__sql_statements = ''
         self.__semicolon_count = 0
         self.__log_queue = ArrayList()
@@ -56,21 +47,6 @@ class PgSql:
 
             # initalize connection to postgres database
             self.__init_pg_connection('postgres', self.__login_credentials, main_connection=False)
-
-            """
-            # check if database exists
-            self.__pg_sql_connection = psycopg2.connect(
-                host=self.__pg_server,
-                port=self.__pg_port,
-                user=self.__pg_username,
-                password=self.__pg_password,
-                database=self.__pg_default_db,
-                sslmode=self.__ssl,
-            )
-            self.__pg_sql_connection.autocommit = True
-
-            self.__pg_sql_cursor = self.__pg_sql_connection.cursor()
-            """
 
             # check if database exists or not
             self.__pg_sql_cursor.execute(f"select datname from pg_catalog.pg_database where datname = '{database}';")
@@ -85,20 +61,6 @@ class PgSql:
 
             # initalize connection to specified database
             self.__init_pg_connection(self.__pg_database, self.__login_credentials)
-
-            """
-            # connect to database
-            self.__pg_connection = psycopg2.connect(
-                host=self.__pg_server,
-                port=self.__pg_port,
-                user=self.__pg_username,
-                password=self.__pg_password,
-                database=self.__pg_database,
-                sslmode=self.__ssl,
-            )
-            self.__pg_connection.autocommit = True
-            self.__pg_cursor = self.__pg_connection.cursor()
-            """
 
             # create sys.log if not exists
             self.__create_log()
@@ -210,7 +172,6 @@ class PgSql:
 
         # print to screen the count
         if printing and self.__pg_cursor.rowcount > 0:
-
             s = '' if self.__pg_cursor.rowcount == 1 else 's'
             print(f'\t{self.__pg_cursor.rowcount} row{s}: {print_str}')
 
@@ -239,7 +200,6 @@ class PgSql:
         tables = ArrayList([table])
 
         # initialize connect to current database for sql_[data_type].table data
-        #self.__init_pg_sql_connection(self.__pg_database)
         self.__init_pg_connection(self.__pg_database, self.__login_credentials)
 
         # complete schema refresh
@@ -342,6 +302,7 @@ class PgSql:
                     self.__pg_cursor.execute(self.__sql_statements)
                 except Exception as error:
                     print(self.__sql_statements)
+                    self.__error_log.error(self.__sql_statements)
                     raise error
 
                 self.__sql_statements = ''
@@ -442,61 +403,42 @@ class PgSql:
             self.__sql_statements = sql_line
             self.__semicolon_count = 1 if sql_line.endswith(';') else 0
 
-    def __init_pg_sql_connection(self, database: str = 'postgres'):
-        """ Initialize another connection for independent data usage """
-
-        # if already connected to the database
-        if str(self.__pg_sql_cursor.connection).count(database) == 0:
-            # new connection for getting sql.table data
-            self.__pg_sql_connection = psycopg2.connect(
-                host=self.__pg_server,
-                port=self.__pg_port,
-                user=self.__pg_username,
-                password=self.__pg_password,
-                database=database,
-                sslmode=self.__ssl,
-            )
-            self.__pg_sql_connection.autocommit = True
-
-            # connection -> cursor
-            self.__pg_sql_cursor = self.__pg_sql_connection.cursor()
-
     def __init_pg_connection(self, database: str, credentials: str, main_connection : bool = True):
         """ Initialize pg connection for data usage """
 
         if main_connection:
             # if already connected to the database
-            if str(self.__pg_cursor.connection).count(database) == 0:
-                # new connection for getting sql.table data
-                self.__pg_connection = psycopg2.connect(
-                    host=credentials['host'],
-                    port=credentials['port'],
-                    user=credentials['username'],
-                    password=credentials['password'],
-                    database=database,
-                    sslmode=credentials['ssl']
-                )
-                self.__pg_connection.autocommit = True
+            #if str(self.__pg_cursor.connection).count(database) == 0:
+            # new connection for getting sql.table data
+            self.__pg_connection = psycopg2.connect(
+                host=credentials['host'],
+                port=credentials['port'],
+                user=credentials['user'],
+                password=credentials['password'],
+                database=database,
+                sslmode=credentials['ssl']
+            )
+            self.__pg_connection.autocommit = True
 
-                # connection -> cursor
-                self.__pg_cursor = self.__pg_connection.cursor()
+            # connection -> cursor
+            self.__pg_cursor = self.__pg_connection.cursor()
 
         else:
             # if already connected to the database
-            if str(self.__pg_sql_cursor.connection).count(database) == 0:
-                # new connection for getting sql.table data
-                self.__pg_sql_connection = psycopg2.connect(
-                    host=credentials['host'],
-                    port=credentials['port'],
-                    user=credentials['username'],
-                    password=credentials['password'],
-                    database=database,
-                    sslmode=credentials['ssl']
-                )
-                self.__pg_sql_connection.autocommit = True
+            #if str(self.__pg_sql_cursor.connection).count(database) == 0:
+            # new connection for getting sql.table data
+            self.__pg_sql_connection = psycopg2.connect(
+                host=credentials['host'],
+                port=credentials['port'],
+                user=credentials['user'],
+                password=credentials['password'],
+                database=database,
+                sslmode=credentials['ssl']
+            )
+            self.__pg_sql_connection.autocommit = True
 
-                # connection -> cursor
-                self.__pg_sql_cursor = self.__pg_sql_connection.cursor()
+            # connection -> cursor
+            self.__pg_sql_cursor = self.__pg_sql_connection.cursor()
 
     def __insert_log(self):
         """ Inserts db_schema, db_table, description & current date/time in the log table """
